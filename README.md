@@ -69,8 +69,7 @@ Pack an app before the apps that require it; they are looked up as
 The bundle step passes `build/gamekit/<name>-generated` as
 `--module-path`, so the game imports `translations` and the modules its
 preparation program writes like its own modules; its locked packages never
-see them. This needs a game lock whose toolchain supports project
-`--module-path`).
+see them. This needs a game lock pinning Ziran 0c95f849 or later.
 
 ## Tests
 
