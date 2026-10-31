@@ -4,6 +4,7 @@
     {
       "commit": "a02feeb703192f1481e72160b1ccff401d17ef9d",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "dependency_refs": {"raylib": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e"},
       "id": "p0797a2ec7b9d9b0e",
       "name": "kryon",
       "ref": "a02feeb703192f1481e72160b1ccff401d17ef9d",
@@ -21,6 +22,7 @@
     {
       "commit": "970d5e44b1702158cb16469892da6ff50f142427",
       "dependencies": {"crypto": "pc23fbf455e97614d", "oqs": "p7098ac9cd92f7e5f"},
+      "dependency_refs": {"crypto": "master", "oqs": "master"},
       "id": "p6af0b5bd9fd0cd31",
       "name": "DaochiClient",
       "ref": "970d5e44b1702158cb16469892da6ff50f142427",
@@ -29,6 +31,7 @@
     {
       "commit": "22d2ddbdc236796953c905a05a2cebf5ab1b4ff3",
       "dependencies": {"liboqs": "pf9af593c157b8edf"},
+      "dependency_refs": {"liboqs": "main"},
       "id": "p7098ac9cd92f7e5f",
       "name": "Oqs",
       "ref": "master",
@@ -45,6 +48,7 @@
     {
       "commit": "47ce0302664fe2f87f3cb05407eac7aa09066c96",
       "dependencies": {"crypto": "pc23fbf455e97614d", "daochi_client": "p6af0b5bd9fd0cd31", "kryon": "p0797a2ec7b9d9b0e"},
+      "dependency_refs": {"crypto": "master", "daochi_client": "970d5e44b1702158cb16469892da6ff50f142427", "kryon": "a02feeb703192f1481e72160b1ccff401d17ef9d"},
       "id": "pf1707c15f1b95b28",
       "name": "Apps",
       "ref": "47ce0302664fe2f87f3cb05407eac7aa09066c96",
@@ -62,11 +66,12 @@
   ],
   "root": {
     "dependencies": {"apps": "pf1707c15f1b95b28", "crypto": "pc23fbf455e97614d", "kryon": "p0797a2ec7b9d9b0e"},
+    "dependency_refs": {"apps": "47ce0302664fe2f87f3cb05407eac7aa09066c96", "crypto": "944826f70779a6b6cd53f6b06a75b36f4d8a2558", "kryon": "a02feeb703192f1481e72160b1ccff401d17ef9d"},
     "name": "Gamekit"
   },
   "toolchain": {
-    "commit": "ee86330414a2febb0135d86506b505af5e6a660b",
-    "ref": "ee86330414a2febb0135d86506b505af5e6a660b",
+    "commit": "0c95f8496de686d851a2c9ee5188ddb56c81e8c6",
+    "ref": "0c95f8496de686d851a2c9ee5188ddb56c81e8c6",
     "url": "https://github.com/ziranlang/ziran.git"
   }
 }

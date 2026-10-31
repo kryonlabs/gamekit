@@ -66,10 +66,11 @@ then:
 Pack an app before the apps that require it; they are looked up as
 `<name>.zx` in the output's folder.
 
-Project commands accept no extra module folders, so the generated
-`translations.zi` and modules a preparation program writes do not reach the
-bundle yet. A game that imports them cannot be packed until Ziran gives
-project builds a generated module folder.
+The bundle step passes `build/gamekit/<name>-generated` as
+`--module-path`, so the game imports `translations` and the modules its
+preparation program writes like its own modules; its locked packages never
+see them. This needs a game lock whose toolchain supports project
+`--module-path`).
 
 ## Tests
 

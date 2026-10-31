@@ -4,7 +4,7 @@ module_roots = ["src", "tools", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "ee86330414a2febb0135d86506b505af5e6a660b"
+ref = "0c95f8496de686d851a2c9ee5188ddb56c81e8c6"
 
 [exports]
 contract = "src/gamekit_contract.zi"

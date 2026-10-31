@@ -678,11 +678,15 @@ PackRun :: (arguments: []string, directory: string) -> bool {
     return true
 }
 
-// The ziran launcher hands project commands to the toolchain the project's
-// lock pins; ZIRAN names another launcher.
+// Project commands run on the launcher of the toolchain the game's lock pins,
+// which `ziran tool` names as ZIRAN_TOOLCHAIN_ROOT, so an older installed
+// launcher never judges their flags; ZIRAN names another launcher.
 PackZiran :: () -> string {
     launcher := EnvironmentText("ZIRAN")
-    return ifx launcher.count > 0 then launcher else "ziran"
+    if launcher.count > 0 { return launcher }
+    toolchain := EnvironmentText("ZIRAN_TOOLCHAIN_ROOT")
+    pinned := JoinPath(toolchain, "build/bin/ziran")
+    return ifx toolchain.count > 0 && PathExists(pinned) then pinned else "ziran"
 }
 
 PackProjectFlags :: (root: string, arguments: *Vec(string)) {
@@ -776,11 +780,12 @@ Pack :: (manifest: string, output: string, release: bool = false) -> bool {
     PackProjectFlags(root, *arguments)
     // Sources beside the entry resolve first, as a game keeps an add-on's
     // modules in its own folder; the project's module roots and locked
-    // packages come from its import map. Project commands take no extra
-    // module folders yet, so GENERATED (translations.zi and what the game's
-    // preparation writes) cannot reach the bundle until Ziran supports that.
+    // packages come from its import map. GENERATED (translations.zi and what
+    // the game's preparation writes) joins the game's own modules.
     VecPush(arguments, "--root")
     VecPush(arguments, PathParent(source))
+    VecPush(arguments, "--module-path")
+    VecPush(arguments, generated)
     index = 0
     while index < app.defines.count {
         VecPush(arguments, "--define")

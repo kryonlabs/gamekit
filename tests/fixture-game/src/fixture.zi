@@ -1,6 +1,8 @@
 // A minimal game-v1 game: it answers frames and offers a library entry.
 #import "apps/node_types"
 #import "apps/node_app"
+// Written by `ziran tool gamekit pack` into the bundle's generated folder.
+#import "translations"
 host_api :: #system_library "host_api";
 ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
 
@@ -15,6 +17,5 @@ FixtureFrame :: (message: AppMessage) -> bool {
 }
 
 FixtureBack :: (message: AppMessage) -> bool {
-    unused message
-    return FixtureScore(1) == 10
+    return FixtureScore(1) == 10 && GameLocaleText(message.locale, "fixture_title").count > 0
 }
