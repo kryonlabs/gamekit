@@ -1,0 +1,18 @@
+{
+  "id": "test.gamekit.fixture-editor",
+  "name": "fixture-editor",
+  "title": "Fixture Editor",
+  "kind": "game",
+  "contract_version": 1,
+  "module_api": 2,
+  "host_api": 41,
+  "save_schema": 1,
+  "build_defines": ["FIXTURE_PORTABLE", "FIXTURE_EDITOR"],
+  "harnesses": ["arcade"],
+  "entry": "editor:Main",
+  "source": "src/editor.zi",
+  "assets": "editor",
+  "locales": "src/locales",
+  "locale_prefix": "fixture_",
+  "preview": "assets/fixture/preview.png"
+}

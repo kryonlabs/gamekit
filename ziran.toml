@@ -1,0 +1,27 @@
+[package]
+name = "Gamekit"
+module_roots = ["src", "tools", "tests"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "ee86330414a2febb0135d86506b505af5e6a660b"
+
+[exports]
+contract = "src/gamekit_contract.zi"
+host = "src/gamekit_host.zi"
+
+[dependencies.kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "a02feeb703192f1481e72160b1ccff401d17ef9d"
+
+[dependencies.apps]
+git = "https://github.com/waozixyz/apps.git"
+ref = "47ce0302664fe2f87f3cb05407eac7aa09066c96"
+
+[dependencies.crypto]
+git = "https://github.com/ziranlang/crypto.git"
+ref = "944826f70779a6b6cd53f6b06a75b36f4d8a2558"
+
+# `ziran tool gamekit pack MANIFEST OUTPUT` packs a game from its own project.
+[tool]
+project = "build/bin/gamekit"

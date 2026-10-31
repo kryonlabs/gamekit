@@ -1,0 +1,6 @@
+[fixture_title]
+Prüfspiel
+---
+[fixture_hint]
+Sag „hallo“	jetzt
+---

@@ -1,0 +1,8 @@
+{
+  "about": "The editor draws the game's sprites and plays its sounds; identical copies are linked to the game instead of packed twice.",
+  "copies": [
+    {"from": "assets/fixture/sprites", "to": "sprites"},
+    {"from": "assets/fixture/sounds/beep.txt", "to": "sounds/beep.txt"},
+    {"from": "assets/extra/help.txt", "to": "help.txt"}
+  ]
+}

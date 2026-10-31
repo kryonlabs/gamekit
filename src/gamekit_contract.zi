@@ -1,0 +1,164 @@
+// The game standard every packed game implements (standards/game-v1.json).
+// GAME_HOST_API is the newest host interface a gamekit host runs; a game
+// that declares a newer one is refused, and so is a different contract or
+// module API. tests/contract_test.zi fails while these differ from the
+// standard.
+#import "std/json_scan"
+
+GAME_CONTRACT_VERSION :: 1
+GAME_MODULE_API :: 2
+GAME_HOST_API :: 41
+GAME_RECORD_NAME_MAX :: 64
+GAME_RECORD_TEXT_MAX :: 65536
+GAME_ASSET_COUNT_MAX :: 2048
+GAME_ASSET_BYTES_MAX :: 16777216
+GAME_ASSETS_BYTES_MAX :: 67108864
+GAME_PROFILE_IDENTITY_MAX :: 128
+GAME_PROFILE_NAME_MAX :: 64
+GAME_PROFILE_AVATAR_MAX :: 256
+
+// The host calls every game may rely on.
+GameRequiredCall :: (name: string) -> bool {
+    return name == "ReadAppHost" || name == "WriteAppHost" || name == "ReadAppUiHost" ||
+    name == "AppLocaleHost" || name == "AppRecordHost" || name == "SaveAppRecordHost"
+}
+
+// Calls a host answers when it can, and otherwise answers as unavailable.
+GameOptionalCall :: (name: string) -> bool {
+    return name == "AppFriendHost" || name == "AppSharedHost" || name == "AppSharedItemHost" ||
+    name == "AppInvitationHost" || name == "SendAppSharedHost" ||
+    name == "RefreshAppSharedHost" || name == "SmoothFramesHost" || name == "AppKeyHost" ||
+    name == "AppProfileHost"
+}
+
+// The player's profile, which the host shares with every game it runs:
+// under a collection such as Arcade every downloaded game gets the
+// collection's one profile, and a standalone game keeps its own local one.
+// AppProfileHost answers it; an empty identity means no account is
+// connected, which the game presents as signed out.
+GameProfile :: struct {
+    // The account or entity identity, such as an Entity public ID.
+    identity: string
+    display_name: string
+    // A language code such as "en"; empty follows the host's locale.
+    language: string
+    // The profile picture as an asset path or picture ID; empty for none.
+    avatar: string
+}
+
+// Whether PROFILE is within the standard's limits: bounded fields, a
+// display name and avatar only with an identity, and a two-letter
+// lowercase language or none.
+GameProfileValid :: (profile: GameProfile) -> bool {
+    if profile.identity.count > GAME_PROFILE_IDENTITY_MAX || profile.display_name.count > GAME_PROFILE_NAME_MAX ||
+    profile.avatar.count > GAME_PROFILE_AVATAR_MAX { return false }
+    if profile.identity.count == 0 && (profile.display_name.count > 0 || profile.avatar.count > 0) { return false }
+    for byte: profile.identity {
+        if byte < cast(u8)33 || byte > cast(u8)126 { return false }
+    }
+    for byte: profile.display_name {
+        if byte < cast(u8)32 || byte == cast(u8)127 { return false }
+    }
+    if profile.language.count == 0 { return true }
+    return profile.language.count == 2 &&
+    profile.language[0] >= #char "a" && profile.language[0] <= #char "z" &&
+    profile.language[1] >= #char "a" && profile.language[1] <= #char "z"
+}
+
+GameCapability :: (name: string) -> bool {
+    return GameRequiredCall(name) || GameOptionalCall(name)
+}
+
+// Record names are lowercase letters, digits, '-' and '_', shorter than
+// GAME_RECORD_NAME_MAX bytes.
+GameRecordNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count >= GAME_RECORD_NAME_MAX { return false }
+    for byte: name {
+        if !((byte >= #char "a" && byte <= #char "z") ||
+            (byte >= #char "0" && byte <= #char "9") ||
+            byte == #char "-" || byte == #char "_") { return false }
+    }
+    return true
+}
+
+// A game's name is its resource folder, assets/<name>/: ASCII letters,
+// digits and '-'.
+GameNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count > 63 { return false }
+    for byte: name {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "-") { return false }
+    }
+    return true
+}
+
+// What a game's catalog.json declares about the standard.
+GameDescriptor :: struct {
+    id: string
+    name: string
+    contract_version: s64
+    module_api: s64
+    host_api: s64
+    save_schema: s64
+    valid: bool
+}
+
+GameDescriptorText :: (text: string, field: string) -> string {
+    span := ReadString(text, FieldAt(text, 0, field))
+    if !span.valid { return "" }
+    return text[span.start:span.end]
+}
+
+GameDescriptorNumber :: (text: string, field: string) -> s64 {
+    number := ReadNumber(text, FieldAt(text, 0, field))
+    if !number.valid { return -1 }
+    return cast(s64)number.value
+}
+
+// Reads catalog.json; the result borrows TEXT.
+GameDescriptorRead :: (text: string) -> GameDescriptor {
+    descriptor := GameDescriptor.{}
+    descriptor.id = GameDescriptorText(text, "id")
+    descriptor.name = GameDescriptorText(text, "name")
+    descriptor.contract_version = GameDescriptorNumber(text, "contract_version")
+    descriptor.module_api = GameDescriptorNumber(text, "module_api")
+    descriptor.host_api = GameDescriptorNumber(text, "host_api")
+    descriptor.save_schema = GameDescriptorNumber(text, "save_schema")
+    descriptor.valid = descriptor.id.count > 0 && GameNameValid(descriptor.name)
+    return descriptor
+}
+
+// Whether a host implementing this standard runs the described game.
+GameDescriptorAccepted :: (descriptor: GameDescriptor) -> bool {
+    return descriptor.valid && descriptor.contract_version == GAME_CONTRACT_VERSION &&
+    descriptor.module_api == GAME_MODULE_API &&
+    descriptor.host_api >= 1 && descriptor.host_api <= GAME_HOST_API &&
+    descriptor.save_schema >= 1
+}
+
+// The text of KEY in a game locale file (assets/<name>/locales/<locale>.txt):
+// a "[key]" line, the text, then "---".
+// Unknown keys read as the key itself.
+GameLocaleLookup :: (text: string, key: string) -> string {
+    at: s64 = 0
+    while at < text.count {
+        end := at
+        while end < text.count && text[end] != cast(u8)10 { end += 1 }
+        line := text[at:end]
+        if line.count == key.count + 2 && line[0] == #char "[" &&
+        line[line.count - 1] == #char "]" && line[1:line.count - 1] == key {
+            start := end + 1
+            last := start
+            while last < text.count {
+                next := last
+                while next < text.count && text[next] != cast(u8)10 { next += 1 }
+                if text[last:next] == "---" {
+                    return text[start:ifx last > start then last - 1 else last]
+                }
+                last = next + 1
+            }
+        }
+        at = end + 1
+    }
+    return key
+}

@@ -1,0 +1,15 @@
+[fixture_title]
+Fixture
+---
+[other_title]
+Not this game's
+---
+
+[fixture_hint]
+Say "hi" \ wave   
+with two lines
+
+---
+[fixture_title]
+Fixture again
+---

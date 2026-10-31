@@ -1,0 +1,50 @@
+// The shared profile a host gives every game: the record AppProfileHost
+// answers and the limits a host checks before sharing it.
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/stdio_linux"
+#import "std/format"
+#import "gamekit_contract"
+#import "gamekit_profile"
+
+using HostValueKind;
+
+failures: s32 = 0;
+
+Check :: (ok: bool, name: string) {
+    if ok { return }
+    failures += 1
+    builder: Vec(u8)
+    BuilderPrint(*builder, "profile_test: FAIL %\n", name)
+    unused PrintError(BuilderFinish(builder))
+}
+
+Field :: (value: HostValue, index: s64, name: string, expected: string) -> bool {
+    field := value.fields[index]
+    text := TextFromBytes(BytesFromPointer(field.value.data, cast(u64)field.value.length))
+    return TextFromCString(field.name) == name && field.value.kind == cast(s32)HostString &&
+    TextFromCString(field.value.type_name) == "string" && text == expected
+}
+
+#program_export
+main :: () -> s32 {
+    Check(GameCapability("AppProfileHost") && GameOptionalCall("AppProfileHost") && !GameRequiredCall("AppProfileHost"),
+        "AppProfileHost is an optional call of the standard")
+    codec: GameProfileCodec
+    signed_out := GameEncodeProfile(GameProfile.{}, *codec)
+    Check(signed_out.kind == cast(s32)HostRecord && TextFromCString(signed_out.type_name) == "GameProfile" &&
+        signed_out.field_count == 4, "a GameProfile record")
+    Check(Field(signed_out, 0, "identity", "") && Field(signed_out, 1, "display_name", ""), "signed out")
+    player := GameProfile.{identity = "entity:3f9a", display_name = "Ada", language = "de", avatar = "assets/entity/pfp.png"}
+    Check(GameProfileValid(player), "a shared profile is valid")
+    shared := GameEncodeProfile(player, *codec)
+    Check(Field(shared, 0, "identity", "entity:3f9a"), "identity")
+    Check(Field(shared, 1, "display_name", "Ada"), "display name")
+    Check(Field(shared, 2, "language", "de"), "language")
+    Check(Field(shared, 3, "avatar", "assets/entity/pfp.png"), "avatar")
+    Check(!GameProfileValid(GameProfile.{display_name = "Nobody"}), "a name without an account is refused")
+    if failures > 0 { return 1 }
+    unused WriteOutput("profile_test: ok\n")
+    return 0
+}

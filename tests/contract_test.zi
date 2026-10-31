@@ -1,0 +1,113 @@
+// The contract matches standards/game-v1.json, and its record, descriptor,
+// locale and profile rules hold. Runs from tests/.
+#import "std/file"
+#import "std/json_document"
+#import "std/stdio_linux"
+#import "std/format"
+#import "gamekit_contract"
+
+failures: s32 = 0;
+
+Check :: (ok: bool, name: string) {
+    if ok { return }
+    failures += 1
+    builder: Vec(u8)
+    BuilderPrint(*builder, "contract_test: FAIL %\n", name)
+    unused PrintError(BuilderFinish(builder))
+}
+
+Number :: (document: *JsonDocument, object: s32, key: string) -> s64 {
+    value, ok := JsonInteger(document, JsonMember(document, object, key))
+    return ifx ok then value else -1
+}
+
+StandardCalls :: (document: *JsonDocument, key: string, required: bool) -> s32 {
+    list := JsonMember(document, document.root, key)
+    count: s32 = 0
+    item := JsonFirst(document, list)
+    while item >= 0 {
+        name := JsonString(document, item)
+        Check(ifx required then GameRequiredCall(name) else GameOptionalCall(name), name)
+        Check(GameCapability(name), name)
+        count += 1
+        item = JsonNext(document, item)
+    }
+    return count
+}
+
+main :: () -> s32 {
+    text, found := ReadEntireFile("../standards/game-v1.json")
+    Check(found, "standard readable")
+    document: JsonDocument
+    Check(JsonRead(*document, text), "standard is JSON")
+    top := document.root
+    Check(Number(*document, top, "contract_version") == GAME_CONTRACT_VERSION, "contract version")
+    Check(Number(*document, top, "module_api") == GAME_MODULE_API, "module API")
+    Check(Number(*document, top, "host_api") == GAME_HOST_API, "host API")
+    records := JsonMember(*document, top, "records")
+    Check(Number(*document, records, "name_bytes_less_than") == GAME_RECORD_NAME_MAX, "record name limit")
+    Check(Number(*document, records, "value_bytes_less_than") == GAME_RECORD_TEXT_MAX, "record value limit")
+    profile_limits := JsonMember(*document, top, "profile")
+    Check(Number(*document, profile_limits, "identity_bytes_at_most") == GAME_PROFILE_IDENTITY_MAX, "profile identity limit")
+    Check(Number(*document, profile_limits, "display_name_bytes_at_most") == GAME_PROFILE_NAME_MAX, "profile name limit")
+    Check(Number(*document, profile_limits, "avatar_bytes_at_most") == GAME_PROFILE_AVATAR_MAX, "profile avatar limit")
+    Check(StandardCalls(*document, "required_host_calls", true) == 6, "six required calls")
+    Check(StandardCalls(*document, "optional_host_calls", false) == 9, "nine optional calls")
+    Check(!GameCapability("ReadStoreHost") && !GameCapability(""), "unknown calls refused")
+
+    Check(GameRecordNameValid("reach.dat") == false, "record names have no dots")
+    Check(GameRecordNameValid("best_score-2"), "record name")
+    Check(!GameRecordNameValid("") && !GameRecordNameValid("Best") && !GameRecordNameValid("a/b"), "bad record names")
+    long: Vec(u8)
+    for 0..GAME_RECORD_NAME_MAX - 1 { Append(*long, "a") }
+    long_name := BuilderFinish(long)
+    Check(!GameRecordNameValid(long_name) && GameRecordNameValid(long_name[1:]), "record name length")
+    Check(GameNameValid("wurm-editor") && !GameNameValid("wurm_editor") && !GameNameValid(""), "game names")
+
+    descriptor := GameDescriptorRead("{\"id\": \"test.game\", \"name\": \"game\", \"contract_version\": 1, \"module_api\": 2, \"host_api\": 41, \"save_schema\": 1}")
+    Check(descriptor.valid && descriptor.id == "test.game" && descriptor.name == "game", "descriptor fields")
+    Check(GameDescriptorAccepted(descriptor), "descriptor accepted")
+    newer := descriptor
+    newer.host_api = GAME_HOST_API + 1
+    Check(!GameDescriptorAccepted(newer), "newer host API refused")
+    other := descriptor
+    other.contract_version = 2
+    Check(!GameDescriptorAccepted(other), "other contract refused")
+    unsaved := descriptor
+    unsaved.save_schema = 0
+    Check(!GameDescriptorAccepted(unsaved), "save schema required")
+    Check(!GameDescriptorRead("{\"id\": \"x\", \"name\": \"bad name\"}").valid, "invalid name refused")
+
+    locale := "[game_title]\nGame\n---\n[game_hint]\nTwo\nlines\n---\n[game_empty]\n---\n"
+    Check(GameLocaleLookup(locale, "game_title") == "Game", "locale text")
+    Check(GameLocaleLookup(locale, "game_hint") == "Two\nlines", "multiline locale text")
+    Check(GameLocaleLookup(locale, "game_empty") == "", "empty locale text")
+    Check(GameLocaleLookup(locale, "game_missing") == "game_missing", "missing key reads as itself")
+    Check(GameLocaleLookup(locale, "game") == "game", "partial key")
+
+    signed_out := GameProfile.{}
+    Check(GameProfileValid(signed_out), "signed-out profile")
+    player := GameProfile.{identity = "entity:3f9a", display_name = "Ada", language = "de", avatar = "assets/entity/pfp.png"}
+    Check(GameProfileValid(player), "shared profile")
+    nameless := GameProfile.{display_name = "Ada"}
+    Check(!GameProfileValid(nameless), "a name needs an identity")
+    spoken := player
+    spoken.language = "deu"
+    Check(!GameProfileValid(spoken), "two-letter language")
+    upper := player
+    upper.language = "DE"
+    Check(!GameProfileValid(upper), "lowercase language")
+    spaced := player
+    spaced.identity = "entity 3f9a"
+    Check(!GameProfileValid(spaced), "identity without spaces")
+    controlled := player
+    controlled.display_name = "Ada\n"
+    Check(!GameProfileValid(controlled), "name without control characters")
+    long_profile := player
+    long_profile.display_name = long_name
+    Check(GameProfileValid(long_profile) == (long_name.count <= GAME_PROFILE_NAME_MAX), "name length")
+
+    if failures > 0 { return 1 }
+    unused WriteOutput("contract_test: ok\n")
+    return 0
+}

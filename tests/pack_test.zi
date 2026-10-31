@@ -1,0 +1,168 @@
+// The pack steps on the fixture game: locale files and translations,
+// bundle.json exclusions, and add-on resource links with requirements.json.
+// Run as pack_test FIXTURE WORK; WORK is replaced.
+#import "std/file"
+#import "std/file_tree_linux"
+#import "std/byte_text_linux"
+#import "std/stdio_linux"
+#import "std/format"
+#import "gamekit_pack"
+
+failures: s32 = 0;
+
+Check :: (ok: bool, name: string) {
+    if ok { return }
+    failures += 1
+    builder: Vec(u8)
+    BuilderPrint(*builder, "pack_test: FAIL %\n", name)
+    unused PrintError(BuilderFinish(builder))
+}
+
+FileIs :: (path: string, expected: string) -> bool {
+    text, found := ReadEntireFile(path)
+    if !found || text != expected {
+        builder: Vec(u8)
+        BuilderPrint(*builder, "pack_test: % holds:\n%\n", path, text)
+        unused PrintError(BuilderFinish(builder))
+        return false
+    }
+    return true
+}
+
+Path :: (a: string, b: string) -> string { return JoinPath(a, b) }
+
+TranslationsTest :: (fixture: string, work: string) {
+    output := Path(work, "locales")
+    code, ok := PackTranslations(Path(fixture, "src/locales"), "fixture_", output)
+    Check(ok, "translations generated")
+    expected := "GameLocaleText :: (language: string, key: string) -> string {\n    if language == \"de\" {\n        if key == \"fixture_title\" { return \"Pr\xc3\xbcfspiel\" }\n        if key == \"fixture_hint\" { return \"Sag \xe2\x80\x9ehallo\xe2\x80\x9c\\tjetzt\" }\n    }\n    if key == \"fixture_title\" { return \"Fixture again\" }\n    if key == \"fixture_hint\" { return \"Say \\\"hi\\\" \\\\ wave   \\nwith two lines\" }\n    return \"\"\n}\n"
+    if code != expected {
+        unused PrintError(code)
+    }
+    Check(code == expected, "translations.zi: other languages first, English as the fallback, repeated keys keep their place")
+    Check(FileIs(Path(output, "en.txt"), "[fixture_title]\nFixture\n---\n[fixture_hint]\nSay \"hi\" \\ wave   \nwith two lines\n---\n[fixture_title]\nFixture again\n---\n"),
+        "en.txt keeps only the game's blocks")
+    Check(FileIs(Path(output, "de.txt"), "[fixture_title]\nPr\xc3\xbcfspiel\n---\n[fixture_hint]\nSag \xe2\x80\x9ehallo\xe2\x80\x9c\tjetzt\n---\n"),
+        "de.txt")
+    Check(!PathExists(Path(output, "README.md")) && !PathExists(Path(output, "README.txt")), "only .txt locale files")
+    empty, empty_ok := PackTranslations(Path(fixture, "no-locales"), "fixture_", Path(work, "no-locales"))
+    Check(empty_ok && empty == "GameLocaleText :: (language: string, key: string) -> string {\n    return \"\"\n}\n",
+        "a game without locales")
+}
+
+LeaveOutTest :: (fixture: string, work: string) {
+    staged := Path(work, "leave")
+    Check(CopyTree(Path(fixture, "assets/fixture"), staged), "stage assets")
+    Check(PackLeaveOut(Path(fixture, "bundle.json"), staged, false), "leave out")
+    Check(!PathExists(Path(staged, "title-portrait.png")), "cover art left out")
+    Check(!PathExists(Path(staged, "drafts")), "drafts/** leaves out the whole folder")
+    Check(IsFile(Path(staged, "preview.png")) && IsFile(Path(staged, "sprites/hero.txt")), "other assets kept")
+    Check(IsFile(Path(staged, "debug.txt")), "release_leave_out only for releases")
+    Check(FileIs(Path(staged, "art.json"), "{\n  \"files\": [\n    {\n      \"path\": \"preview.png\",\n      \"source\": \"art/preview.kra\"\n    }\n  ]\n}\n"),
+        "art.json lists only remaining files")
+    release := Path(work, "release")
+    Check(CopyTree(Path(fixture, "assets/fixture"), release), "stage release assets")
+    Check(PackLeaveOut(Path(fixture, "bundle.json"), release, true), "release leave out")
+    Check(!PathExists(Path(release, "debug.txt")) && !PathExists(Path(release, "title-portrait.png")), "release exclusions")
+    untouched := Path(work, "untouched")
+    Check(CopyTree(Path(fixture, "assets/fixture"), untouched), "stage untouched assets")
+    Check(PackLeaveOut(Path(fixture, "no-bundle.json"), untouched, true), "no bundle.json")
+    Check(IsFile(Path(untouched, "title-portrait.png")) && FileIs(Path(untouched, "art.json"), ReadEntireFile(Path(fixture, "assets/fixture/art.json"))),
+        "nothing left out without bundle.json")
+}
+
+// Stages the editor add-on as Pack does: its assets folder and copies.
+StageEditor :: (fixture: string, app: *PackApp, resources: string) -> bool {
+    if !RemoveTree(resources) || !CopyTree(Path(fixture, app.assets), resources) { return false }
+    index: s64 = 0
+    while index < app.copies.count {
+        copy := app.copies[index]
+        if !PackCopyPath(Path(fixture, copy.from), Path(resources, copy.to)) { return false }
+        index += 1
+    }
+    return true
+}
+
+LinksTest :: (fixture: string, work: string) {
+    base: PackApp
+    Check(PackReadApp(fixture, "catalog.json", *base), "read the game")
+    Check(base.id == "test.gamekit.fixture" && base.name == "fixture" && base.prepare == "tools/prepare.zi", "game descriptor")
+    Check(base.defines.count == 1 && base.defines[0] == "FIXTURE_PORTABLE", "game build defines")
+    Check(base.library_entries.count == 1 && base.library_entries[0] == "fixture:FixtureScore", "portable library entries")
+    Check(base.requires.count == 0 && !base.shared_code, "the game requires nothing")
+    app: PackApp
+    Check(PackReadApp(fixture, "./editor/catalog.json", *app), "read the add-on")
+    Check(app.requires.count == 1 && app.requires[0] == "test.gamekit.fixture" && app.shared_code, "add-on requirements")
+    Check(app.copies.count == 3, "add-on shared asset copies")
+    staged := Path(work, "staged")
+    resources := Path(staged, "fixture-editor/assets/fixture-editor")
+    Check(StageEditor(fixture, *app, resources), "stage the add-on")
+    missing: Vec(PackLink)
+    Check(!PackShare(fixture, *app, resources, staged, *missing), "the game must be packed first")
+    original := Path(staged, "fixture/assets/fixture")
+    Check(CopyTree(Path(fixture, "assets/fixture"), original), "stage the game")
+    links: Vec(PackLink)
+    Check(PackShare(fixture, *app, resources, staged, *links), "share resources")
+    Check(links.count == 2, "two identical copies linked")
+    if links.count == 2 {
+        Check(links[0].dependency == "test.gamekit.fixture" && links[0].path == "assets/fixture-editor/sprites/" &&
+            links[0].source == "assets/fixture/sprites/", "folder link")
+        Check(links[1].path == "assets/fixture-editor/sounds/beep.txt" && links[1].source == "assets/fixture/sounds/beep.txt", "file link")
+    }
+    Check(!PathExists(Path(resources, "sprites")) && !PathExists(Path(resources, "sounds/beep.txt")), "linked copies not packed")
+    Check(IsFile(Path(resources, "help.txt")) && IsFile(Path(resources, "readme.txt")), "own and unshared files packed")
+    bundles := Path(work, "apps")
+    Check(CreateDirectories(bundles) && WriteEntireFile(Path(bundles, "fixture.zx"), "base bundle\n"), "fake game bundle")
+    requirements := Path(work, "requirements.json")
+    Check(PackRequirements(fixture, *app, VecSlice(links, 0, links.count), bundles, requirements), "requirements.json")
+    Check(FileIs(requirements, "{\"dependencies\": [\"test.gamekit.fixture\"], \"resources\": [{\"dependency\": \"test.gamekit.fixture\", \"path\": \"assets/fixture-editor/sprites/\", \"source\": \"assets/fixture/sprites/\"}, {\"dependency\": \"test.gamekit.fixture\", \"path\": \"assets/fixture-editor/sounds/beep.txt\", \"source\": \"assets/fixture/sounds/beep.txt\"}], \"sha256\": {\"test.gamekit.fixture\": \"ba4d1e98f43574ea61eb86e143ba2484147f6df3d291a1db607f8165680073e9\"}}\n"),
+        "requirements.json names the links and the game bundle's digest")
+    // A prepared copy that differs from the game's is packed, not linked.
+    Check(WriteEntireFile(Path(original, "sounds/beep.txt"), "louder\n"), "change the game's sound")
+    Check(WriteEntireFile(Path(original, "sprites/wall.txt"), "cropped\n"), "change one sprite")
+    Check(StageEditor(fixture, *app, resources), "restage the add-on")
+    changed: Vec(PackLink)
+    Check(PackShare(fixture, *app, resources, staged, *changed), "share changed resources")
+    Check(changed.count == 0, "only byte-identical copies are linked")
+    Check(IsFile(Path(resources, "sounds/beep.txt")) && IsFile(Path(resources, "sprites/hero.txt")), "differing copies packed")
+}
+
+ValidationTest :: (fixture: string, work: string) {
+    Check(PackRelativeValid("assets/a.png") && !PackRelativeValid("../a") && !PackRelativeValid("a/../b") &&
+        !PackRelativeValid("/a") && !PackRelativeValid(""), "project-relative paths")
+    Check(PackLibraryEntryValid("json_scan:ArrayPositions") && !PackLibraryEntryValid("portable") &&
+        !PackLibraryEntryValid("1a:B") && !PackLibraryEntryValid("a:B:C"), "library entries")
+    Check(PackRecordNameValid("reach.dat") && !PackRecordNameValid("..") && !PackRecordNameValid("a/b"), "shared record names")
+    app: PackApp
+    Check(!PackReadApp(fixture, "../fixture-game/catalog.json", *app), "a manifest outside the project")
+    bad := Path(work, "bad")
+    Check(CreateDirectories(bad), "bad project")
+    Check(WriteEntireFile(Path(bad, "catalog.json"), "{\"id\": \"x\", \"name\": \"x\", \"kind\": \"game\", \"contract_version\": 1, \"module_api\": 2, \"host_api\": 99, \"save_schema\": 1}"), "newer host")
+    newer: PackApp
+    Check(!PackReadApp(bad, "catalog.json", *newer), "a newer host API is refused")
+    Check(WriteEntireFile(Path(bad, "apps.json"), "{\"apps\": [{\"manifest\": \"game.json\", \"shared_code\": true}]}"), "bad apps.json")
+    Check(WriteEntireFile(Path(bad, "game.json"), "{\"id\": \"x\", \"name\": \"x\", \"kind\": \"game\", \"contract_version\": 1, \"module_api\": 2, \"host_api\": 41, \"save_schema\": 1, \"assets\": \"a\", \"locales\": \"l\", \"locale_prefix\": \"x_\", \"source\": \"s.zi\", \"entry\": \"s:Main\"}"), "game.json")
+    unshared: PackApp
+    Check(!PackReadApp(bad, "game.json", *unshared), "shared code needs dependencies")
+    Check(WriteEntireFile(Path(bad, "apps.json"), "{\"apps\": [{\"manifest\": \"game.json\", \"covers\": {}}]}"), "unknown field")
+    unknown: PackApp
+    Check(!PackReadApp(bad, "game.json", *unknown), "unknown apps.json fields are refused")
+}
+
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 3 {
+        unused PrintError("usage: pack_test FIXTURE WORK\n")
+        return 2
+    }
+    fixture := ResolvePath(TextFromCString(argv[1]))
+    work := TextFromCString(argv[2])
+    if !RemoveTree(work) || !CreateDirectories(work) { return 2 }
+    work = ResolvePath(work)
+    TranslationsTest(fixture, work)
+    LeaveOutTest(fixture, work)
+    LinksTest(fixture, work)
+    ValidationTest(fixture, work)
+    if failures > 0 { return 1 }
+    unused WriteOutput("pack_test: ok\n")
+    return 0
+}

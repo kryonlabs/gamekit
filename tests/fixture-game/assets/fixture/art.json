@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "preview.png",
+      "source": "art/preview.kra"
+    },
+    {
+      "path": "title-portrait.png",
+      "source": "art/title.kra"
+    }
+  ]
+}

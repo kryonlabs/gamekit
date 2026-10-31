@@ -1,0 +1,820 @@
+// Packs one game of the project it runs in into its portable .zx app:
+// stages the game's assets, leaves out what bundle.json says, writes its
+// locale files and generated translations, links resources shared with the
+// apps it requires, and bundles it with the project's own lock.
+#import "std/file"
+#import "std/file_tree_linux"
+#import "std/process_run_linux"
+#import "std/stdio_linux"
+#import "std/environment_linux"
+#import "std/text_tools"
+#import "std/json_document"
+#import "std/format"
+#import "crypto/sha256"
+#import "gamekit_contract"
+
+PACK_REQUIRES_MAX :: 8
+PACK_SHARED_RECORDS_MAX :: 8
+PACK_LIBRARY_ENTRIES_MAX :: 64
+PACK_RESOURCE_LINKS_MAX :: 16
+
+// One shared_assets.json copy: a project file or folder copied to
+// assets/<name>/<to>.
+PackCopy :: struct {
+    from: string
+    to: string
+}
+
+// One app as its catalog.json and its entry in the project's apps.json
+// declare it.
+PackApp :: struct {
+    manifest: string
+    id: string
+    name: string
+    assets: string
+    locales: string
+    locale_prefix: string
+    source: string
+    entry: string
+    prepare: string
+    defines: Vec(string)
+    requires: Vec(string)
+    shared_code: bool
+    library_entries: Vec(string)
+    copies: Vec(PackCopy)
+}
+
+// One resource the bundle leaves to a required app instead of packing it.
+PackLink :: struct {
+    dependency: string
+    path: string
+    source: string
+}
+
+PackFail :: (message: string, detail: string = "") -> bool {
+    builder: Vec(u8)
+    if detail.count > 0 { BuilderPrint(*builder, "gamekit pack: %: %\n", message, detail) }
+    else { BuilderPrint(*builder, "gamekit pack: %\n", message) }
+    unused PrintError(BuilderFinish(builder))
+    return false
+}
+
+PackJoin :: (left: string, right: string) -> string {
+    if left.count == 0 || left == "." { return right }
+    if right.count == 0 || right == "." { return left }
+    return JoinPath(left, right)
+}
+
+PackConcat :: (left: string, right: string) -> string {
+    builder: Vec(u8)
+    Append(*builder, left)
+    Append(*builder, right)
+    return BuilderFinish(builder)
+}
+
+// A path inside the project: relative, nonempty and without "..".
+PackRelativeValid :: (path: string) -> bool {
+    if path.count == 0 || path[0] == #char "/" { return false }
+    parts := TextSplit(path, "/")
+    index: s64 = 0
+    while index < parts.count {
+        if parts[index] == ".." { return false }
+        index += 1
+    }
+    return true
+}
+
+PackAbsolute :: (root: string, path: string) -> string {
+    if path.count > 0 && path[0] == #char "/" { return path }
+    return PackJoin(root, path)
+}
+
+PackReadJson :: (document: *JsonDocument, path: string) -> bool {
+    text, found := ReadEntireFile(path)
+    if !found { return PackFail("cannot read", path) }
+    if !JsonRead(document, text) { return PackFail("invalid JSON", path) }
+    if JsonKindOf(document, document.root) != .Object { return PackFail("expected a JSON object", path) }
+    return true
+}
+
+PackWriteJson :: (document: *JsonDocument, node: s32, style: JsonStyle, path: string, newline: bool) -> bool {
+    text := JsonWrite(document, node, style)
+    if newline { text = PackConcat(text, "\n") }
+    if !WriteEntireFile(path, text) { return PackFail("cannot write", path) }
+    return true
+}
+
+PackField :: (document: *JsonDocument, object: s32, key: string) -> string {
+    return JsonString(document, JsonMember(document, object, key))
+}
+
+// Reads a list of distinct, nonempty strings of at most LIMIT entries.
+PackStrings :: (document: *JsonDocument, object: s32, key: string, limit: s32, output: *Vec(string)) -> bool {
+    node := JsonMember(document, object, key)
+    if node < 0 { return true }
+    if JsonKindOf(document, node) != .Array || JsonCount(document, node) > limit { return false }
+    item := JsonFirst(document, node)
+    while item >= 0 {
+        if JsonKindOf(document, item) != .String { return false }
+        value := JsonString(document, item)
+        if value.count == 0 { return false }
+        index: s64 = 0
+        while index < output.count {
+            if (<<output)[index] == value { return false }
+            index += 1
+        }
+        VecPush(<<output, value)
+        item = JsonNext(document, item)
+    }
+    return true
+}
+
+PackIdentifier :: (text: string) -> bool {
+    if text.count == 0 { return false }
+    first := text[0]
+    if !((first >= #char "a" && first <= #char "z") || (first >= #char "A" && first <= #char "Z") ||
+        first == #char "_") { return false }
+    for byte: text {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_") { return false }
+    }
+    return true
+}
+
+// module:Function, as `ziran bundle --retain` takes it.
+PackLibraryEntryValid :: (entry: string) -> bool {
+    if entry.count > 253 { return false }
+    colon := TextFind(entry, ":")
+    return colon > 0 && PackIdentifier(entry[:colon]) && PackIdentifier(entry[colon + 1:])
+}
+
+PackRecordNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count > 63 || name == "." || name == ".." { return false }
+    for byte: name {
+        if !((byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+            (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
+            byte == #char "-") { return false }
+    }
+    return true
+}
+
+PackManifestEqual :: (left: string, right: string) -> bool {
+    a := ifx TextHasPrefix(left, "./") then left[2:] else left
+    b := ifx TextHasPrefix(right, "./") then right[2:] else right
+    return a == b
+}
+
+// The copies the shared_assets.json beside MANIFEST lists.
+PackCopies :: (root: string, manifest: string, copies: *Vec(PackCopy)) -> bool {
+    path := PackAbsolute(root, PackJoin(PathParent(manifest), "shared_assets.json"))
+    if !IsFile(path) { return true }
+    document: JsonDocument
+    if !PackReadJson(*document, path) { return false }
+    list := JsonMember(*document, document.root, "copies")
+    if JsonKindOf(*document, list) != .Array { return PackFail("shared_assets.json needs a copies list", path) }
+    item := JsonFirst(*document, list)
+    while item >= 0 {
+        copy := PackCopy.{}
+        copy.from = PackField(*document, item, "from")
+        copy.to = PackField(*document, item, "to")
+        if !PackRelativeValid(copy.from) || !PackRelativeValid(copy.to) {
+            return PackFail("invalid shared asset copy", path)
+        }
+        VecPush(<<copies, copy)
+        item = JsonNext(*document, item)
+    }
+    return true
+}
+
+// Reads MANIFEST (catalog.json, relative to ROOT) and, when the project's
+// apps.json lists it, that entry's dependencies and portable library entries.
+PackReadApp :: (root: string, manifest: string, app: *PackApp) -> bool {
+    if !PackRelativeValid(manifest) { return PackFail("invalid manifest path", manifest) }
+    app.manifest = manifest
+    path := PackAbsolute(root, manifest)
+    document: JsonDocument
+    if !PackReadJson(*document, path) { return false }
+    top := document.root
+    descriptor := GameDescriptor.{}
+    app.id = PackField(*document, top, "id")
+    app.name = PackField(*document, top, "name")
+    descriptor.id = app.id
+    descriptor.name = app.name
+    descriptor.valid = app.id.count > 0 && GameNameValid(app.name)
+    contract, contract_ok := JsonInteger(*document, JsonMember(*document, top, "contract_version"))
+    module_api, module_ok := JsonInteger(*document, JsonMember(*document, top, "module_api"))
+    host_api, host_ok := JsonInteger(*document, JsonMember(*document, top, "host_api"))
+    save_schema, save_ok := JsonInteger(*document, JsonMember(*document, top, "save_schema"))
+    descriptor.contract_version = ifx contract_ok then contract else -1
+    descriptor.module_api = ifx module_ok then module_api else -1
+    descriptor.host_api = ifx host_ok then host_api else -1
+    descriptor.save_schema = ifx save_ok then save_schema else -1
+    if !descriptor.valid { return PackFail("catalog.json needs an id and a valid name", path) }
+    if !GameDescriptorAccepted(descriptor) {
+        return PackFail("catalog.json does not declare the game-v1 contract, module API and a supported host API", path)
+    }
+    if !JsonIs(*document, JsonMember(*document, top, "kind"), "game") { return PackFail("catalog.json kind is not game", path) }
+    app.assets = PackField(*document, top, "assets")
+    app.locales = PackField(*document, top, "locales")
+    app.locale_prefix = PackField(*document, top, "locale_prefix")
+    app.source = PackField(*document, top, "source")
+    app.entry = PackField(*document, top, "entry")
+    app.prepare = PackField(*document, top, "prepare_assets")
+    if !PackRelativeValid(app.assets) || !PackRelativeValid(app.locales) || !PackRelativeValid(app.source) ||
+    app.locale_prefix.count == 0 || !PackLibraryEntryValid(app.entry) {
+        return PackFail("catalog.json needs relative assets, locales and source, a locale_prefix and a module:Function entry", path)
+    }
+    if app.prepare.count > 0 && (!PackRelativeValid(app.prepare) ||
+        (PathSuffix(app.prepare) != ".zi" && PathSuffix(app.prepare) != ".py")) {
+        return PackFail("invalid prepare_assets program", app.prepare)
+    }
+    if !PackStrings(*document, top, "build_defines", 64, *app.defines) { return PackFail("invalid build_defines", path) }
+    if !PackCopies(root, manifest, *app.copies) { return false }
+    apps_path := PackJoin(root, "apps.json")
+    if !IsFile(apps_path) { return true }
+    apps: JsonDocument
+    if !PackReadJson(*apps, apps_path) { return false }
+    list := JsonMember(*apps, apps.root, "apps")
+    item := JsonFirst(*apps, list)
+    while item >= 0 {
+        if PackManifestEqual(PackField(*apps, item, "manifest"), manifest) {
+            member := JsonFirst(*apps, item)
+            while member >= 0 {
+                key := JsonKey(*apps, member)
+                if key != "manifest" && key != "cover" && key != "enabled" && key != "requires" &&
+                key != "shared_code" && key != "library_entries" && key != "shared_records" {
+                    return PackFail("unknown apps.json field", key)
+                }
+                member = JsonNext(*apps, member)
+            }
+            if !PackStrings(*apps, item, "requires", PACK_REQUIRES_MAX, *app.requires) {
+                return PackFail("invalid app dependencies", manifest)
+            }
+            shared := JsonMember(*apps, item, "shared_code")
+            if shared >= 0 {
+                value, ok := JsonBool(*apps, shared)
+                if !ok { return PackFail("shared_code is not a bool", manifest) }
+                app.shared_code = value
+            }
+            if app.shared_code && app.requires.count == 0 {
+                return PackFail("shared code needs declared dependencies", manifest)
+            }
+            records: Vec(string)
+            if !PackStrings(*apps, item, "shared_records", PACK_SHARED_RECORDS_MAX, *records) {
+                return PackFail("invalid shared records", manifest)
+            }
+            index: s64 = 0
+            while index < records.count {
+                if !PackRecordNameValid(records[index]) { return PackFail("invalid shared record", records[index]) }
+                index += 1
+            }
+            if !PackStrings(*apps, item, "library_entries", PACK_LIBRARY_ENTRIES_MAX, *app.library_entries) {
+                return PackFail("invalid portable library entries", manifest)
+            }
+            index = 0
+            while index < app.library_entries.count {
+                if !PackLibraryEntryValid(app.library_entries[index]) {
+                    return PackFail("invalid portable library entry", app.library_entries[index])
+                }
+                index += 1
+            }
+            return true
+        }
+        item = JsonNext(*apps, item)
+    }
+    return true
+}
+
+// The app of the project's apps.json whose catalog declares ID.
+PackFindApp :: (root: string, id: string, app: *PackApp) -> bool {
+    apps: JsonDocument
+    apps_path := PackJoin(root, "apps.json")
+    if !IsFile(apps_path) || !PackReadJson(*apps, apps_path) { return false }
+    item := JsonFirst(*apps, JsonMember(*apps, apps.root, "apps"))
+    while item >= 0 {
+        manifest := PackField(*apps, item, "manifest")
+        if PackRelativeValid(manifest) {
+            document: JsonDocument
+            text, found := ReadEntireFile(PackJoin(root, manifest))
+            if found && JsonRead(*document, text) && PackField(*document, document.root, "id") == id {
+                return PackReadApp(root, manifest, app)
+            }
+        }
+        item = JsonNext(*apps, item)
+    }
+    return false
+}
+
+// Copies a file or a folder, replacing what is at TARGET.
+PackCopyPath :: (source: string, target: string) -> bool {
+    if !CreateDirectories(PathParent(target)) { return PackFail("cannot create", PathParent(target)) }
+    if IsDirectory(source) {
+        if !CopyTree(source, target) { return PackFail("cannot copy", source) }
+        return true
+    }
+    if !CopyFile(source, target) { return PackFail("cannot copy", source) }
+    return true
+}
+
+// Every path below DIRECTORY that matches the PARTS of a pattern from INDEX
+// on: shell wildcards per path segment and ** for any run of folders.
+PackGlob :: (directory: string, parts: []string, index: s64, matches: *Vec(string)) {
+    if index >= parts.count { return }
+    part := parts[index]
+    last := index == parts.count - 1
+    if part == "**" {
+        // A final ** matches the folder itself, and so everything in it.
+        if last {
+            VecPush(<<matches, directory)
+            return
+        }
+        PackGlob(directory, parts, index + 1, matches)
+        names: Vec(string)
+        unused ListDirectory(directory, *names)
+        at: s64 = 0
+        while at < names.count {
+            path := JoinPath(directory, names[at])
+            if PathStatus(path, false).kind == .Directory { PackGlob(path, parts, index, matches) }
+            at += 1
+        }
+        return
+    }
+    names: Vec(string)
+    unused ListDirectory(directory, *names)
+    at: s64 = 0
+    while at < names.count {
+        if MatchName(names[at], part) {
+            path := JoinPath(directory, names[at])
+            if last { VecPush(<<matches, path) }
+            else if PathStatus(path, false).kind == .Directory { PackGlob(path, parts, index + 1, matches) }
+        }
+        at += 1
+    }
+}
+
+// Removes what RULES (a bundle.json) says a bundle leaves out of RESOURCES:
+// leave_out always and release_leave_out for a release. art.json then keeps
+// only the files that remain.
+PackLeaveOut :: (rules: string, resources: string, release: bool) -> bool {
+    if !IsFile(rules) { return true }
+    document: JsonDocument
+    if !PackReadJson(*document, rules) { return false }
+    patterns: Vec(string)
+    if !PackStrings(*document, document.root, "leave_out", 256, *patterns) { return PackFail("invalid leave_out", rules) }
+    if release && !PackStrings(*document, document.root, "release_leave_out", 256, *patterns) {
+        return PackFail("invalid release_leave_out", rules)
+    }
+    index: s64 = 0
+    while index < patterns.count {
+        pattern := patterns[index]
+        if !PackRelativeValid(pattern) { return PackFail("invalid leave_out pattern", pattern) }
+        parts := TextSplit(pattern, "/")
+        matches: Vec(string)
+        PackGlob(resources, VecSlice(parts, 0, parts.count), 0, *matches)
+        at: s64 = 0
+        while at < matches.count {
+            if !RemoveTree(matches[at]) { return PackFail("cannot remove", matches[at]) }
+            at += 1
+        }
+        index += 1
+    }
+    art_path := JoinPath(resources, "art.json")
+    if patterns.count == 0 || !IsFile(art_path) { return true }
+    art: JsonDocument
+    if !PackReadJson(*art, art_path) { return false }
+    files := JsonMember(*art, art.root, "files")
+    if JsonKindOf(*art, files) != .Array { return PackFail("art.json needs a files list", art_path) }
+    kept: Vec(s32)
+    item := JsonFirst(*art, files)
+    while item >= 0 {
+        path := PackField(*art, item, "path")
+        if PackRelativeValid(path) && IsFile(JoinPath(resources, path)) { VecPush(kept, item) }
+        item = JsonNext(*art, item)
+    }
+    JsonClear(*art, files)
+    index = 0
+    while index < kept.count {
+        unused JsonAppend(*art, files, kept[index])
+        index += 1
+    }
+    return PackWriteJson(*art, art.root, JsonPythonStyle(2), art_path, true)
+}
+
+// Python's str.rstrip() over ASCII whitespace.
+PackStripEnd :: (text: string) -> string {
+    end := text.count
+    while end > 0 && (text[end - 1] == #char " " || text[end - 1] == #char "\t" || text[end - 1] == #char "\n" ||
+        text[end - 1] == #char "\r" || text[end - 1] == cast(u8)11 || text[end - 1] == cast(u8)12) { end -= 1 }
+    return text[:end]
+}
+
+// The keys of the game's blocks in one locale file and their text, in file
+// order; a repeated key keeps its first place and its last text.
+PackLocale :: struct {
+    blocks: Vec(u8)
+    keys: Vec(string)
+    values: Vec(string)
+}
+
+// Keeps the "[PREFIX...]" blocks of a locale file: the heading, the text
+// with trailing space removed, then "---".
+PackLocaleRead :: (text: string, prefix: string, locale: *PackLocale) {
+    heading_prefix := PackConcat("[", prefix)
+    blocks := TextSplit(text, "---\n")
+    index: s64 = 0
+    while index < blocks.count {
+        lines := TextSplit(blocks[index], "\n")
+        // A final newline ends the last line rather than starting another.
+        count := lines.count
+        if count > 0 && lines[count - 1].count == 0 { count -= 1 }
+        heading := ""
+        first: s64 = 0
+        while first < count {
+            line := lines[first]
+            if line.count > 0 && line[line.count - 1] == #char "\r" { line = line[:line.count - 1] }
+            if line.count > 0 { heading = line; break }
+            first += 1
+        }
+        if heading.count > 0 && TextHasPrefix(heading, heading_prefix) {
+            body: Vec(u8)
+            at := first + 1
+            while at < count {
+                line := lines[at]
+                if line.count > 0 && line[line.count - 1] == #char "\r" { line = line[:line.count - 1] }
+                if at > first + 1 { Append(*body, "\n") }
+                Append(*body, line)
+                at += 1
+            }
+            value := PackStripEnd(BuilderFinish(body))
+            BuilderPrint(*locale.blocks, "%\n%\n---\n", heading, value)
+            key := heading[1:heading.count - 1]
+            known: s64 = 0
+            while known < locale.keys.count && locale.keys[known] != key { known += 1 }
+            if known < locale.keys.count { locale.values[known] = value }
+            else {
+                VecPush(locale.keys, key)
+                VecPush(locale.values, value)
+            }
+        }
+        index += 1
+    }
+}
+
+// Adds one language's lookups to the generated GameLocaleText. English is
+// the fallback, so its lookups come last and outside any language test.
+PackTranslationsAppend :: (code: *Vec(u8), language: string, locale: *PackLocale) {
+    english := language == "en"
+    if !english { BuilderPrint(code, "    if language == % {\n", JsonQuote(language)) }
+    index: s64 = 0
+    while index < locale.keys.count {
+        indent := ifx english then "    " else "        "
+        BuilderPrint(code, "%if key == % { return % }\n", indent, JsonQuote(locale.keys[index]),
+            JsonQuote(locale.values[index], false))
+        index += 1
+    }
+    if !english { Append(code, "    }\n") }
+}
+
+// Writes the game's blocks of each locale file in LOCALES to OUTPUT and
+// returns translations.zi: GameLocaleText(language, key), so the text also
+// lives in the game itself for hosts that only know their own locale files.
+PackTranslations :: (locales: string, prefix: string, output: string) -> (code: string, ok: bool) {
+    code: Vec(u8)
+    Append(*code, "GameLocaleText :: (language: string, key: string) -> string {\n")
+    names: Vec(string)
+    if IsDirectory(locales) && !ListDirectory(locales, *names) {
+        unused PackFail("cannot list", locales)
+        return "", false
+    }
+    if !CreateDirectories(output) {
+        unused PackFail("cannot create", output)
+        return "", false
+    }
+    pass := 0
+    while pass < 2 {
+        index: s64 = 0
+        while index < names.count {
+            name := names[index]
+            english := name == "en.txt"
+            if PathSuffix(name) == ".txt" && IsFile(JoinPath(locales, name)) && english == (pass == 1) {
+                text, found := ReadEntireFile(JoinPath(locales, name))
+                if !found {
+                    unused PackFail("cannot read", JoinPath(locales, name))
+                    return "", false
+                }
+                locale: PackLocale
+                PackLocaleRead(text, prefix, *locale)
+                if !WriteEntireFile(JoinPath(output, name), BuilderFinish(locale.blocks)) {
+                    unused PackFail("cannot write", JoinPath(output, name))
+                    return "", false
+                }
+                PackTranslationsAppend(*code, PathStem(name), *locale)
+            }
+            index += 1
+        }
+        pass += 1
+    }
+    Append(*code, "    return \"\"\n}\n")
+    return BuilderFinish(code), true
+}
+
+PackSameFile :: (left: string, right: string) -> bool {
+    a, a_found := ReadEntireFile(left)
+    b, b_found := ReadEntireFile(right)
+    return a_found && b_found && a == b
+}
+
+// Whether every file below TARGET has an identical copy at the same place
+// below SOURCE, and there is at least one.
+PackSameTree :: (target: string, source: string, files: *s64) -> bool {
+    names: Vec(string)
+    if !ListDirectory(target, *names) { return false }
+    index: s64 = 0
+    while index < names.count {
+        path := JoinPath(target, names[index])
+        other := JoinPath(source, names[index])
+        kind := PathStatus(path, false).kind
+        if kind == .Directory {
+            if !PackSameTree(path, other, files) { return false }
+        } else if kind == .File {
+            if !IsFile(other) || !PackSameFile(path, other) { return false }
+            <<files += 1
+        }
+        index += 1
+    }
+    return true
+}
+
+// PATH relative to PREFIX by whole segments; ok false when PATH is not
+// inside PREFIX. PATH itself is ".".
+PackRelativeTo :: (path: string, prefix: string) -> (relative: string, ok: bool) {
+    if path == prefix { return ".", true }
+    if path.count > prefix.count && path[:prefix.count] == prefix && path[prefix.count] == #char "/" {
+        return path[prefix.count + 1:], true
+    }
+    return "", false
+}
+
+// Replaces the copies APP shares byte for byte with a required app of the
+// same project by links to that app's resources. STAGED holds each packed
+// app's assets as build/gamekit/<name>/assets/<name>.
+PackShare :: (root: string, app: *PackApp, resources: string, staged: string, links: *Vec(PackLink)) -> bool {
+    index: s64 = 0
+    while index < app.requires.count {
+        dependency := app.requires[index]
+        original: PackApp
+        if !PackFindApp(root, dependency, *original) {
+            return PackFail("the project's apps.json declares no app with the required id", dependency)
+        }
+        original_root := JoinPath(JoinPath(JoinPath(staged, original.name), "assets"), original.name)
+        if !IsDirectory(original_root) {
+            return PackFail("pack the required app first", dependency)
+        }
+        prefixes: Vec(PackCopy)
+        VecPush(prefixes, PackCopy.{from = original.assets, to = ""})
+        at: s64 = 0
+        while at < original.copies.count {
+            VecPush(prefixes, original.copies[at])
+            at += 1
+        }
+        copy_index: s64 = 0
+        while copy_index < app.copies.count {
+            copy := app.copies[copy_index]
+            prefix_index: s64 = 0
+            while prefix_index < prefixes.count {
+                prefix := prefixes[prefix_index]
+                relative, inside := PackRelativeTo(copy.from, prefix.from)
+                prefix_index += 1
+                if !inside { continue }
+                target := JoinPath(resources, copy.to)
+                shared := PackJoin(prefix.to, relative)
+                source := PackJoin(original_root, shared)
+                target_kind := PathStatus(target, false).kind
+                source_kind := PathStatus(source, false).kind
+                if target_kind == .Missing || source_kind == .Missing { continue }
+                if (target_kind == .Directory) != (source_kind == .Directory) { continue }
+                suffix := ""
+                if target_kind == .Directory {
+                    files: s64 = 0
+                    if !PackSameTree(target, source, *files) || files == 0 { continue }
+                    suffix = "/"
+                } else if !PackSameFile(target, source) { continue }
+                link := PackLink.{}
+                link.dependency = dependency
+                path_builder: Vec(u8)
+                BuilderPrint(*path_builder, "assets/%/", app.name); Append(*path_builder, copy.to); Append(*path_builder, suffix)
+                link.path = BuilderFinish(path_builder)
+                source_builder: Vec(u8)
+                BuilderPrint(*source_builder, "assets/%/", original.name); Append(*source_builder, shared); Append(*source_builder, suffix)
+                link.source = BuilderFinish(source_builder)
+                VecPush(<<links, link)
+                if !RemoveTree(target) { return PackFail("cannot remove", target) }
+                break
+            }
+            copy_index += 1
+        }
+        index += 1
+    }
+    if links.count > PACK_RESOURCE_LINKS_MAX { return PackFail("too many shared resource links", app.name) }
+    return true
+}
+
+PackFileSha256 :: (path: string) -> (digest: string, ok: bool) {
+    bytes, found := ReadEntireFile(path)
+    if !found { return "", false }
+    context: Sha256Context
+    Sha256Initialize(*context)
+    Sha256UpdateText(*context, bytes)
+    hash: [32]u8
+    Sha256FinishBytes(*context, hash[:])
+    return TextHex(hash[:]), true
+}
+
+// requirements.json: the required app IDs, the shared resource links and
+// each required bundle's SHA-256, so an update of the base app also
+// invalidates what the add-on cached from it.
+PackRequirements :: (root: string, app: *PackApp, links: []PackLink, bundles: string, path: string) -> bool {
+    document: JsonDocument
+    top := JsonNewObject(*document)
+    dependencies := JsonNewArray(*document)
+    digests := JsonNewObject(*document)
+    index: s64 = 0
+    while index < app.requires.count {
+        dependency := app.requires[index]
+        unused JsonAppend(*document, dependencies, JsonNewString(*document, dependency))
+        original: PackApp
+        if !PackFindApp(root, dependency, *original) {
+            return PackFail("the project's apps.json declares no app with the required id", dependency)
+        }
+        bundle := JoinPath(bundles, PackConcat(original.name, ".zx"))
+        digest, found := PackFileSha256(bundle)
+        if !found { return PackFail("pack the required app first; missing", bundle) }
+        unused JsonSet(*document, digests, dependency, JsonNewString(*document, digest))
+        index += 1
+    }
+    resources := JsonNewArray(*document)
+    index = 0
+    while index < links.count {
+        link := links[index]
+        item := JsonNewObject(*document)
+        unused JsonSet(*document, item, "dependency", JsonNewString(*document, link.dependency))
+        unused JsonSet(*document, item, "path", JsonNewString(*document, link.path))
+        unused JsonSet(*document, item, "source", JsonNewString(*document, link.source))
+        unused JsonAppend(*document, resources, item)
+        index += 1
+    }
+    unused JsonSet(*document, top, "dependencies", dependencies)
+    unused JsonSet(*document, top, "resources", resources)
+    unused JsonSet(*document, top, "sha256", digests)
+    return PackWriteJson(*document, top, JsonPythonStyle(-1, true, true), path, true)
+}
+
+// Runs ARGUMENTS in DIRECTORY with the terminal's streams.
+PackRun :: (arguments: []string, directory: string) -> bool {
+    options: ProcessOptions = .{arguments = arguments, directory = directory}
+    run: ProcessRun
+    if !RunProcess(options, *run) || !run.started { return PackFail("cannot start", arguments[0]) }
+    if run.code != 0 { return PackFail("command failed", TextJoin(arguments, " ")) }
+    return true
+}
+
+// The ziran launcher hands project commands to the toolchain the project's
+// lock pins; ZIRAN names another launcher.
+PackZiran :: () -> string {
+    launcher := EnvironmentText("ZIRAN")
+    return ifx launcher.count > 0 then launcher else "ziran"
+}
+
+PackProjectFlags :: (root: string, arguments: *Vec(string)) {
+    VecPush(<<arguments, "--project")
+    // Without local overrides the exact lock is used.
+    if !IsFile(JoinPath(root, "ziran.local.toml")) { VecPush(<<arguments, "--locked") }
+}
+
+// Runs the game's own asset preparation: a Ziran program is built from the
+// game's project and run as PROGRAM RESOURCES GENERATED from its root.
+PackPrepare :: (root: string, app: *PackApp, resources: string, generated: string, tools: string) -> bool {
+    program := JoinPath(root, app.prepare)
+    if !IsFile(program) { return PackFail("missing prepare_assets program", app.prepare) }
+    run: Vec(string)
+    if PathSuffix(app.prepare) == ".zi" {
+        output := JoinPath(tools, app.name)
+        build: Vec(string)
+        VecPush(build, PackZiran())
+        VecPush(build, "build")
+        PackProjectFlags(root, *build)
+        VecPush(build, "--target=c")
+        VecPush(build, "--exe")
+        VecPush(build, "--root")
+        VecPush(build, PathParent(program))
+        VecPush(build, "--entry")
+        VecPush(build, PackConcat(PathStem(program), ":main"))
+        VecPush(build, "-o")
+        VecPush(build, output)
+        VecPush(build, program)
+        if !PackRun(VecSlice(build, 0, build.count), root) { return false }
+        VecPush(run, JoinPath(output, PathStem(program)))
+    } else {
+        // A game may keep a Python preparation script of its own.
+        VecPush(run, "python3")
+        VecPush(run, program)
+    }
+    VecPush(run, resources)
+    VecPush(run, generated)
+    return PackRun(VecSlice(run, 0, run.count), root)
+}
+
+// Packs the game MANIFEST (its catalog.json, relative to the project root)
+// into OUTPUT, a .zx file. RELEASE also leaves out release_leave_out.
+// Required apps are packed first into OUTPUT's folder as <name>.zx.
+Pack :: (manifest: string, output: string, release: bool = false) -> bool {
+    root := EnvironmentText("ZIRAN_PROJECT_ROOT")
+    if root.count == 0 { root = WorkingDirectory() }
+    if !IsFile(JoinPath(root, "ziran.toml")) { return PackFail("run from a Ziran project", root) }
+    if PathSuffix(output) != ".zx" { return PackFail("the output must be a .zx file", output) }
+    app: PackApp
+    if !PackReadApp(root, manifest, *app) { return false }
+    bundle := PackAbsolute(root, output)
+    bundles := PathParent(bundle)
+    work := JoinPath(JoinPath(root, "build"), "gamekit")
+    staged := JoinPath(work, app.name)
+    // Start empty: files a game no longer has must not reach its bundle.
+    if !RemoveTree(staged) { return PackFail("cannot remove", staged) }
+    resources := JoinPath(JoinPath(staged, "assets"), app.name)
+    assets := JoinPath(root, app.assets)
+    if !IsDirectory(assets) { return PackFail("missing assets folder", app.assets) }
+    if !CreateDirectories(resources) || !CopyTree(assets, resources) { return PackFail("cannot stage", assets) }
+    index: s64 = 0
+    while index < app.copies.count {
+        copy := app.copies[index]
+        if !PackCopyPath(JoinPath(root, copy.from), JoinPath(resources, copy.to)) { return false }
+        index += 1
+    }
+    // Build settings are source metadata, not part of the signed descriptor.
+    catalog: JsonDocument
+    if !PackReadJson(*catalog, JoinPath(root, manifest)) { return false }
+    unused JsonRemove(*catalog, catalog.root, "build_defines")
+    unused JsonRemove(*catalog, catalog.root, "prepare_assets")
+    if !PackWriteJson(*catalog, catalog.root, JsonPythonStyle(2), JoinPath(resources, "catalog.json"), true) { return false }
+    rules := JoinPath(PathParent(JoinPath(root, manifest)), "bundle.json")
+    if !PackLeaveOut(rules, resources, release) { return false }
+    code, translated := PackTranslations(JoinPath(root, app.locales), app.locale_prefix, JoinPath(resources, "locales"))
+    if !translated { return false }
+    generated := JoinPath(work, PackConcat(app.name, "-generated"))
+    if !RemoveTree(generated) || !CreateDirectories(generated) { return PackFail("cannot create", generated) }
+    if app.prepare.count > 0 && !PackPrepare(root, *app, resources, generated, JoinPath(work, "tools")) { return false }
+    links: Vec(PackLink)
+    if !PackShare(root, *app, resources, work, *links) { return false }
+    if app.requires.count > 0 &&
+    !PackRequirements(root, *app, VecSlice(links, 0, links.count), bundles, JoinPath(resources, "requirements.json")) { return false }
+    if !WriteEntireFile(JoinPath(generated, "translations.zi"), code) { return PackFail("cannot write", generated) }
+    if !CreateDirectories(bundles) { return PackFail("cannot create", bundles) }
+    source := JoinPath(root, app.source)
+    arguments: Vec(string)
+    VecPush(arguments, PackZiran())
+    VecPush(arguments, "bundle")
+    PackProjectFlags(root, *arguments)
+    // Sources beside the entry resolve first, as a game keeps an add-on's
+    // modules in its own folder; the project's module roots and locked
+    // packages come from its import map. Project commands take no extra
+    // module folders yet, so GENERATED (translations.zi and what the game's
+    // preparation writes) cannot reach the bundle until Ziran supports that.
+    VecPush(arguments, "--root")
+    VecPush(arguments, PathParent(source))
+    index = 0
+    while index < app.defines.count {
+        VecPush(arguments, "--define")
+        VecPush(arguments, app.defines[index])
+        index += 1
+    }
+    index = 0
+    while index < app.library_entries.count {
+        VecPush(arguments, "--retain")
+        VecPush(arguments, app.library_entries[index])
+        index += 1
+    }
+    if app.shared_code {
+        index = 0
+        while index < app.requires.count {
+            original: PackApp
+            if !PackFindApp(root, app.requires[index], *original) {
+                return PackFail("the project's apps.json declares no app with the required id", app.requires[index])
+            }
+            library := JoinPath(bundles, PackConcat(original.name, ".zx"))
+            if !IsFile(library) { return PackFail("pack the required app first; missing", library) }
+            VecPush(arguments, "--library")
+            VecPush(arguments, library)
+            index += 1
+        }
+    }
+    VecPush(arguments, "--define")
+    VecPush(arguments, "KRYON_HOSTED_UI")
+    VecPush(arguments, "--asset-dir")
+    VecPush(arguments, PackConcat("assets=", JoinPath(staged, "assets")))
+    VecPush(arguments, "--entry")
+    VecPush(arguments, app.entry)
+    VecPush(arguments, "-o")
+    VecPush(arguments, bundle)
+    VecPush(arguments, source)
+    return PackRun(VecSlice(arguments, 0, arguments.count), root)
+}

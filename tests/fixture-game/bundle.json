@@ -1,0 +1,5 @@
+{
+  "about": "The cover art stays out of the bundle; drafts never ship, and release builds also leave out the debug notes.",
+  "leave_out": ["*-portrait.png", "drafts/**"],
+  "release_leave_out": ["debug.txt"]
+}

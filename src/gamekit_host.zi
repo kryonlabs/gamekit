@@ -1,0 +1,324 @@
+// Runs one game bundle under supervision. The host owns files, input and
+// the account; the game owns its rules and screens and reaches the host only
+// through the calls of the game standard (gamekit/contract).
+#import "std/file"
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/date_time_linux"
+#import "std/c_string"
+#import "std/json_scan"
+#import "kryon/hosted_app"
+#import "kryon/hosted_values"
+#import "kryon/widget_host"
+#import "kryon/app_files"
+#import "kryon/tree_input"
+#import "apps/node_types"
+#import "apps/node_codec"
+#import "gamekit_contract"
+#import "gamekit_profile"
+
+using HostValueKind;
+
+gamekit_libc :: #system_library "libc";
+GameChangeDirectory :: (path: *u8) -> s32 #foreign gamekit_libc "chdir";
+
+// Which game to open: its signed package ID, its resource folder name
+// (assets/<name>/) and the path of its .zx bundle.
+GameIdentity :: struct {
+    id: string
+    name: string
+    bundle: string
+}
+
+GameHost :: struct {
+    app: HostedApp
+    game: GameIdentity
+    // The shared profile every game this host runs receives.
+    profile: GameProfile
+    profile_codec: GameProfileCodec
+    bytes: string
+    records: AppFiles
+    resources: AppFiles
+    record_root: string
+    resource_root: string
+    ready: bool
+    identifying: bool
+    drawing: bool
+    received: bool
+    succeeded: bool
+    record_failed: bool
+    record_text: string
+    frame: AppUiFrame
+    locale: string
+    translations: string
+    message_codec: WidgetAppMessageCodec
+    frame_codec: WidgetAppUiFrameCodec
+    person_codec: WidgetAppPersonCodec
+    shared_codec: WidgetAppSharedCodec
+    item_codec: WidgetAppSharedItemCodec
+    invitation_codec: WidgetAppInvitationCodec
+}
+
+host: GameHost;
+
+// Sets the profile AppProfileHost gives games; an invalid one is refused
+// and the games see no account. A collection sets its one profile, a
+// standalone game its own local one. PROFILE's strings must outlive it.
+GameSetProfile :: (profile: GameProfile) -> bool {
+    if !GameProfileValid(profile) {
+        host.profile = GameProfile.{}
+        return false
+    }
+    host.profile = profile
+    return true
+}
+
+GameJoin :: (left: string, right: string) -> string {
+    builder: Vec(u8)
+    BuilderPrint(*builder, "%/%", left, right)
+    return BuilderFinish(builder)
+}
+
+GameAllows :: (context: *void, module: string, name: string) -> bool {
+    return GameCapability(name) || WidgetHostSupports(module, name)
+}
+
+GameTextResult :: (value: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(value), .length = cast(usize)value.count}
+}
+
+GameArgumentText :: (value: HostValue) -> string {
+    return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
+}
+
+// Translations travel inside the game's own resource namespace:
+// assets/<name>/locales/<locale>.txt, with English as the fallback.
+GameTranslations :: () -> string {
+    filename: Vec(u8)
+    BuilderPrint(*filename, "assets/%/locales/%.txt", host.game.name, host.locale)
+    path := BuilderFinish(filename)
+    resource := HostedAppAsset(*host.app, path)
+    AppFileFree(path)
+    if !resource.found {
+        fallback: Vec(u8)
+        BuilderPrint(*fallback, "assets/%/locales/en.txt", host.game.name)
+        english := BuilderFinish(fallback)
+        resource = HostedAppAsset(*host.app, english)
+        AppFileFree(english)
+    }
+    return resource.data
+}
+
+GameCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    name := TextFromCString(function)
+    result.* = HostValue.{.kind = cast(s32)HostVoid, .type_name = HostTextData("void")}
+    if name == "ReadAppHost" && count == 0 {
+        message := AppMessage.{.abi = MODULE_ABI}
+        if !host.identifying {
+            message.action = APP_FRAME
+            message.name = host.game.name
+            message.locale = host.locale
+            message.shared_status = APP_SHARED_UNAVAILABLE
+            message.time = UnixNow()
+        }
+        result.* = WidgetEncodeAppMessage(message, *host.message_codec)
+        return 1
+    }
+    if host.identifying { return 0 }
+    if name == "WriteAppHost" && count == 1 && WidgetValidAppMessage(arguments[0]) {
+        answer := WidgetDecodeAppMessage(arguments[0], *host.message_codec)
+        host.received = true
+        host.succeeded = answer.succeeded && answer.abi == MODULE_ABI
+        return 1
+    }
+    if name == "ReadAppUiHost" && count == 0 {
+        result.* = WidgetEncodeAppUiFrame(host.frame, *host.frame_codec)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        result.* = GameTextResult(GameLocaleLookup(host.translations, GameArgumentText(arguments[0])))
+        return 1
+    }
+    if name == "AppRecordHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        record := GameArgumentText(arguments[0])
+        if !GameRecordNameValid(record) { return 0 }
+        AppFileFree(host.record_text)
+        host.record_text = AppFileRead(*host.records, record)
+        host.record_failed = host.record_failed || host.records.status == -1 ||
+        host.record_text.count >= GAME_RECORD_TEXT_MAX
+        if host.record_failed {
+            AppFileFree(host.record_text)
+            host.record_text = ""
+        }
+        result.* = GameTextResult(host.record_text)
+        return 1
+    }
+    if name == "SaveAppRecordHost" && count == 2 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        record := GameArgumentText(arguments[0])
+        text := GameArgumentText(arguments[1])
+        saved := !host.record_failed && GameRecordNameValid(record) &&
+        text.count < GAME_RECORD_TEXT_MAX && AppFileWrite(*host.records, record, text)
+        result.* = HostScalar("bool", ifx saved then 1 else 0)
+        return 1
+    }
+    if name == "SmoothFramesHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppProfileHost" && count == 0 {
+        result.* = GameEncodeProfile(host.profile, *host.profile_codec)
+        return 1
+    }
+    // Without a connected account a game presents its signed-out Friends
+    // state, and an unsent invitation is never reported as sent.
+    if name == "AppFriendHost" && count == 1 {
+        result.* = WidgetEncodeAppPerson(AppPerson.{}, *host.person_codec)
+        return 1
+    }
+    if name == "AppSharedHost" && count == 1 {
+        result.* = WidgetEncodeAppShared(AppShared.{}, *host.shared_codec)
+        return 1
+    }
+    if name == "AppSharedItemHost" && count == 2 {
+        result.* = WidgetEncodeAppSharedItem(AppSharedItem.{}, *host.item_codec)
+        return 1
+    }
+    if name == "AppInvitationHost" && count == 1 {
+        result.* = WidgetEncodeAppInvitation(AppInvitation.{}, *host.invitation_codec)
+        return 1
+    }
+    if name == "RefreshAppSharedHost" || name == "SendAppSharedHost" {
+        result.* = HostScalar("bool", 0)
+        return 1
+    }
+    if !host.drawing { return 0 }
+    if name == "AppKeyHost" && count == 0 {
+        result.* = HostScalar("s32", cast(s64)KeyboardTake(host.frame.session))
+        return 1
+    }
+    return WidgetHostCall(context, module, function, arguments, count, result)
+}
+
+// A bundle holds only its own assets/<name>/ folder, within the standard's
+// size limits, declares the standard in catalog.json and asks for the three
+// frame calls.
+GameAssetsValid :: () -> bool {
+    path_bytes: Vec(u8)
+    BuilderPrint(*path_bytes, "assets/%/", host.game.name)
+    prefix := BuilderFinish(path_bytes)
+    defer { AppFileFree(prefix) }
+    count := BundleAssets(host.app.bundle)
+    if count == cast(u64)0 || count > cast(u64)GAME_ASSET_COUNT_MAX { return false }
+    total: u64 = 0
+    for index: cast(u64)0..count - 1 {
+        path := TextFromCString(BundleAssetPath(host.app.bundle, index))
+        if !AppFileNameValid(path) || path.count <= prefix.count ||
+        path[:prefix.count] != prefix || BundleAssetLength(host.app.bundle, index) > cast(u64)GAME_ASSET_BYTES_MAX {
+            return false
+        }
+        total += BundleAssetLength(host.app.bundle, index)
+        if total > cast(u64)GAME_ASSETS_BYTES_MAX { return false }
+    }
+    manifest_path := GameJoin(prefix[:prefix.count - 1], "catalog.json")
+    manifest := HostedAppAsset(*host.app, manifest_path)
+    AppFileFree(manifest_path)
+    if !manifest.found { return false }
+    descriptor := GameDescriptorRead(manifest.data)
+    if !GameDescriptorAccepted(descriptor) || descriptor.id != host.game.id ||
+    descriptor.name != host.game.name { return false }
+    read: bool
+    write: bool
+    frame: bool
+    capabilities := BundleCapabilities(host.app.bundle)
+    if capabilities < cast(u64)3 || capabilities > cast(u64)HOSTED_APP_CAPABILITY_LIMIT { return false }
+    for capability: cast(u64)0..capabilities - 1 {
+        name := TextFromCString(BundleCapabilityFunctionName(host.app.bundle, capability))
+        read = read || name == "ReadAppHost"
+        write = write || name == "WriteAppHost"
+        frame = frame || name == "ReadAppUiHost"
+    }
+    return read && write && frame
+}
+
+GameClose :: () {
+    HostedAppClose(*host.app)
+    AppFilesClose(*host.records)
+    AppFilesClose(*host.resources)
+    AppFileFree(host.record_root)
+    AppFileFree(host.resource_root)
+    AppFileFree(host.record_text)
+    AppFileFree(host.bytes)
+    // The shared profile belongs to the host, not to the closed game.
+    profile := host.profile
+    host = GameHost.{}
+    host.profile = profile
+}
+
+// Opens GAME's bundle, checks it against the standard, asks it to identify
+// as a node app, and gives it records under
+// DATA_DIRECTORY/games/<id>/records. Its assets are extracted under
+// .../resources, which becomes the working directory. LOCALE is a language
+// code such as "en"; GAME's strings must outlive the open game.
+GameOpen :: (game: GameIdentity, data_directory: string, locale: string) -> bool {
+    if host.ready && host.game.id == game.id { return true }
+    GameClose()
+    if !GameNameValid(game.name) || game.id.count == 0 { return false }
+    host.game = game
+    host.locale = ifx locale.count >= 2 then locale[:2] else "en"
+    bytes, found := ReadEntireFile(game.bundle)
+    if !found { return false }
+    host.bytes = bytes
+    if !HostedAppOpen(*host.app, host.bytes) || !GameAssetsValid() { return false }
+    host.translations = GameTranslations()
+    host.identifying = true
+    answer: s64
+    identified := HostedAppStart(*host.app, GameAllows, GameCall, null) &&
+    HostedAppRun(*host.app, *answer) && answer == MODULE_NODE_APP
+    host.identifying = false
+    if !identified { return false }
+    parent := GameJoin(data_directory, "games")
+    root := GameJoin(parent, game.id)
+    AppFileFree(parent)
+    host.record_root = GameJoin(root, "records")
+    host.resource_root = GameJoin(root, "resources")
+    AppFileFree(root)
+    if !AppFilesOpen(*host.records, host.record_root) || !AppFilesOpen(*host.resources, host.resource_root) {
+        return false
+    }
+    count := BundleAssets(host.app.bundle)
+    for asset: cast(u64)0..count - 1 {
+        name := TextFromCString(BundleAssetPath(host.app.bundle, asset))
+        content := TextFromBytes(BytesFromPointer(BundleAssetBytes(host.app.bundle, asset),
+            BundleAssetLength(host.app.bundle, asset)))
+        if !AppFileWrite(*host.resources, name, content) { return false }
+    }
+    directory: [4096]u8
+    host.ready = CopyCString(host.resource_root, directory[:]) && GameChangeDirectory(*directory[0]) == 0
+    return host.ready
+}
+
+GameAssetAllowed :: (path: string) -> bool {
+    return path == "" || (AppFileNameValid(path) && HostedAppAsset(*host.app, path).found)
+}
+
+// Runs one frame of the open game. False when it trapped, did not answer or
+// reported failure; the host then closes it.
+GameFrame :: (frame: AppUiFrame) -> bool {
+    host.frame = frame
+    host.received = false
+    host.succeeded = false
+    host.drawing = true
+    WidgetHostBegin(frame.session, GameAssetAllowed)
+    answer: s64
+    ok := HostedAppRun(*host.app, *answer)
+    WidgetHostEnd()
+    host.drawing = false
+    return ok && answer == 0 && host.received && host.succeeded
+}

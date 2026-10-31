@@ -1,0 +1,20 @@
+// A minimal game-v1 game: it answers frames and offers a library entry.
+#import "apps/node_types"
+#import "apps/node_app"
+host_api :: #system_library "host_api";
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+
+FixtureScore :: (level: s32) -> s32 { return level * 10 }
+
+#program_export
+Main :: () -> s32 { return RunNodeApp(FixtureFrame, FixtureBack) }
+
+FixtureFrame :: (message: AppMessage) -> bool {
+    frame := ReadAppUiHost()
+    return frame.width >= 0 && message.locale.count >= 0
+}
+
+FixtureBack :: (message: AppMessage) -> bool {
+    unused message
+    return FixtureScore(1) == 10
+}

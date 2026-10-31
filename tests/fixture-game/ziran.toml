@@ -1,0 +1,20 @@
+[package]
+name = "fixture-game"
+entry = "src/fixture.zi"
+module_roots = ["src"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "ee86330414a2febb0135d86506b505af5e6a660b"
+
+[dependencies.gamekit]
+git = "https://github.com/waozixyz/gamekit.git"
+ref = "master"
+
+[dependencies.kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "a02feeb703192f1481e72160b1ccff401d17ef9d"
+
+[dependencies.apps]
+git = "https://github.com/waozixyz/apps.git"
+ref = "47ce0302664fe2f87f3cb05407eac7aa09066c96"

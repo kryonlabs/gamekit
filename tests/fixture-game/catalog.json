@@ -1,0 +1,19 @@
+{
+  "id": "test.gamekit.fixture",
+  "name": "fixture",
+  "title": "Fixture",
+  "kind": "game",
+  "contract_version": 1,
+  "module_api": 2,
+  "host_api": 41,
+  "save_schema": 1,
+  "build_defines": ["FIXTURE_PORTABLE"],
+  "prepare_assets": "tools/prepare.zi",
+  "harnesses": ["arcade"],
+  "entry": "fixture:Main",
+  "source": "src/fixture.zi",
+  "assets": "assets/fixture",
+  "locales": "src/locales",
+  "locale_prefix": "fixture_",
+  "preview": "assets/fixture/preview.png"
+}

@@ -1,0 +1,200 @@
+// `ziran tool gamekit pack` packs the fixture game and its add-on from the
+// fixture's own project, and Ziran's bundle loader accepts both bundles.
+// Run as fixture_test GAMEKIT WORK; WORK is replaced by a copy of the
+// fixture whose ignored ziran.local.toml points at this checkout and at the
+// packages its lock already pins, so nothing is fetched.
+#import "std/file"
+#import "std/file_tree_linux"
+#import "std/process_run_linux"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/stdio_linux"
+#import "std/text_tools"
+#import "std/json_document"
+#import "std/bundle_host"
+#import "std/sort"
+#import "std/format"
+#import "crypto/sha256"
+#import "gamekit_contract"
+
+failures: s32 = 0;
+
+Check :: (ok: bool, name: string) {
+    if ok { return }
+    failures += 1
+    builder: Vec(u8)
+    BuilderPrint(*builder, "fixture_test: FAIL %\n", name)
+    unused PrintError(BuilderFinish(builder))
+}
+
+Run :: (arguments: []string, directory: string, capture: bool) -> (output: string, ok: bool) {
+    options: ProcessOptions = .{arguments = arguments, directory = directory, capture_output = capture}
+    run: ProcessRun
+    started := RunProcess(options, *run)
+    text := BuilderFinish(run.output)
+    if !started || run.code != 0 {
+        builder: Vec(u8)
+        BuilderPrint(*builder, "fixture_test: command failed (%): %\n", run.code, TextJoin(arguments, " "))
+        unused PrintError(BuilderFinish(builder))
+        return text, false
+    }
+    return text, true
+}
+
+PackagePath :: (root: string, name: string) -> string {
+    arguments: [5]string = .["ziran", "pkg", "path", name, "--locked"]
+    text, ok := Run(arguments[:], root, true)
+    return ifx ok then TextTrim(text) else ""
+}
+
+// Overrides for gamekit itself and every package gamekit's lock pins.
+WriteOverrides :: (root: string, work: string) -> bool {
+    lock_text, found := ReadEntireFile(JoinPath(root, "ziran.lock"))
+    lock: JsonDocument
+    if !found || !JsonRead(*lock, lock_text) { return false }
+    text: Vec(u8)
+    BuilderPrint(*text, "[overrides]\ngamekit = %\n", JsonQuote(root))
+    toolchain := PackagePath(root, "ziran")
+    if toolchain.count == 0 { return false }
+    BuilderPrint(*text, "ziran = %\n", JsonQuote(toolchain))
+    item := JsonFirst(*lock, JsonMember(*lock, lock.root, "packages"))
+    while item >= 0 {
+        name := JsonString(*lock, JsonMember(*lock, item, "name"))
+        path := PackagePath(root, name)
+        if path.count == 0 { return false }
+        BuilderPrint(*text, "% = %\n", name, JsonQuote(path))
+        item = JsonNext(*lock, item)
+    }
+    return WriteEntireFile(JoinPath(work, "ziran.local.toml"), BuilderFinish(text))
+}
+
+Pack :: (work: string, manifest: string, output: string, release: bool) -> bool {
+    arguments: [7]string = .["ziran", "tool", "gamekit", "pack", manifest, output, "--release"]
+    count := ifx release then 7 else 6
+    unused_text, ok := Run(arguments[:count], work, false)
+    unused unused_text
+    return ok
+}
+
+AssetIndex :: (bundle: *void, name: string) -> s64 {
+    count := BundleAssets(bundle)
+    index: u64 = 0
+    while index < count {
+        if TextFromCString(BundleAssetPath(bundle, index)) == name { return cast(s64)index }
+        index += 1
+    }
+    return -1
+}
+
+AssetText :: (bundle: *void, name: string) -> string {
+    index := AssetIndex(bundle, name)
+    if index < 0 { return "" }
+    return TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, cast(u64)index), BundleAssetLength(bundle, cast(u64)index)))
+}
+
+// The bundle's own assets below PREFIX, sorted, one per line.
+AssetList :: (bundle: *void, prefix: string) -> string {
+    names: Vec(string)
+    count := BundleAssets(bundle)
+    index: u64 = 0
+    while index < count {
+        name := TextFromCString(BundleAssetPath(bundle, index))
+        if TextHasPrefix(name, prefix) { VecPush(names, name[prefix.count:]) }
+        index += 1
+    }
+    SortText(VecSlice(names, 0, names.count))
+    return TextJoin(VecSlice(names, 0, names.count), "\n")
+}
+
+HasCapability :: (bundle: *void, name: string) -> bool {
+    count := BundleCapabilities(bundle)
+    index: u64 = 0
+    while index < count {
+        if TextFromCString(BundleCapabilityFunctionName(bundle, index)) == name { return true }
+        index += 1
+    }
+    return false
+}
+
+FileSha256 :: (path: string) -> string {
+    bytes, found := ReadEntireFile(path)
+    if !found { return "" }
+    context: Sha256Context
+    Sha256Initialize(*context)
+    Sha256UpdateText(*context, bytes)
+    hash: [32]u8
+    Sha256FinishBytes(*context, hash[:])
+    return TextHex(hash[:])
+}
+
+CheckGame :: (bundle: *void) {
+    Check(AssetList(bundle, "assets/fixture/") ==
+        "art.json\ncatalog.json\ndebug.txt\nlocales/de.txt\nlocales/en.txt\nprepared.txt\npreview.png\nsounds/beep.txt\nsprites/hero.txt\nsprites/wall.txt",
+        "the game packs its staged assets without what bundle.json leaves out")
+    Check(AssetList(bundle, "") == AssetList(bundle, "assets/fixture/") || BundleAssets(bundle) == cast(u64)10,
+        "only the game's own resource folder")
+    catalog := AssetText(bundle, "assets/fixture/catalog.json")
+    descriptor := GameDescriptorRead(catalog)
+    Check(GameDescriptorAccepted(descriptor) && descriptor.id == "test.gamekit.fixture", "packed catalog.json declares the contract")
+    Check(!TextContains(catalog, "build_defines") && !TextContains(catalog, "prepare_assets"), "build settings stay out of the descriptor")
+    Check(AssetText(bundle, "assets/fixture/prepared.txt") == "prepared by the game\n", "the game's own preparation ran")
+    Check(TextHasPrefix(AssetText(bundle, "assets/fixture/locales/de.txt"), "[fixture_title]\nPr"), "locale files")
+    Check(HasCapability(bundle, "ReadAppHost") && HasCapability(bundle, "WriteAppHost") && HasCapability(bundle, "ReadAppUiHost"),
+        "the game asks for the frame calls")
+}
+
+CheckEditor :: (bundle: *void, game_bundle: string) {
+    own := AssetList(bundle, "assets/fixture-editor/")
+    Check(own == "catalog.json\nhelp.txt\nlocales/de.txt\nlocales/en.txt\nreadme.txt\nrequirements.json\nshared_assets.json",
+        "the add-on packs only what it does not share with the game")
+    requirements := AssetText(bundle, "assets/fixture-editor/requirements.json")
+    document: JsonDocument
+    Check(JsonRead(*document, requirements), "requirements.json is JSON")
+    digest := JsonString(*document, JsonMember(*document, JsonMember(*document, document.root, "sha256"), "test.gamekit.fixture"))
+    Check(digest.count == 64 && digest == FileSha256(game_bundle), "requirements.json pins the game bundle it was packed with")
+    Check(JsonCount(*document, JsonMember(*document, document.root, "resources")) == 2, "two linked resources")
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 3 {
+        unused PrintError("usage: fixture_test GAMEKIT WORK\n")
+        return 2
+    }
+    root := ResolvePath(TextFromCString(argv[1]))
+    work := TextFromCString(argv[2])
+    if !RemoveTree(work) || !CopyTree(JoinPath(root, "tests/fixture-game"), work) { return 2 }
+    work = ResolvePath(work)
+    Check(WriteOverrides(root, work), "local overrides")
+    lock: [2]string = .["ziran", "lock"]
+    unused_lock, locked := Run(lock[:], work, false)
+    unused unused_lock
+    Check(locked, "lock the fixture game")
+    if failures > 0 { return 1 }
+    // An add-on cannot be packed before the game it requires.
+    Check(!Pack(work, "editor/catalog.json", "build/apps/fixture-editor.zx", false), "the add-on needs the packed game")
+    Check(Pack(work, "catalog.json", "build/apps/fixture.zx", false), "pack the game")
+    Check(Pack(work, "editor/catalog.json", "build/apps/fixture-editor.zx", true), "pack the add-on as a release")
+    if failures > 0 { return 1 }
+    game_path := JoinPath(work, "build/apps/fixture.zx")
+    editor_path := JoinPath(work, "build/apps/fixture-editor.zx")
+    game_name: [4096]u8
+    editor_name: [4096]u8
+    Check(CopyCString(game_path, game_name[:]) && CopyCString(editor_path, editor_name[:]), "bundle paths")
+    game := OpenBundle(*game_name[0])
+    Check(game != null, "the game bundle is a valid .zx")
+    if game == null { return 1 }
+    CheckGame(game)
+    libraries: [1]*void
+    libraries[0] = game
+    editor := OpenBundleWithLibraries(*editor_name[0], *libraries[0], 1)
+    Check(editor != null, "the add-on is a valid .zx against the game's library")
+    if editor != null {
+        CheckEditor(editor, game_path)
+        CloseBundle(editor)
+    }
+    CloseBundle(game)
+    if failures > 0 { return 1 }
+    unused WriteOutput("fixture_test: ok\n")
+    return 0
+}

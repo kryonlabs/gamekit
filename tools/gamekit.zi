@@ -1,0 +1,26 @@
+// The gamekit project tool: `ziran tool gamekit pack MANIFEST OUTPUT
+// [--release]` packs a game of the project it runs in.
+#import "std/byte_text_linux"
+#import "std/stdio_linux"
+#import "gamekit_pack"
+
+USAGE :: "usage: ziran tool gamekit pack MANIFEST OUTPUT [--release]\n  MANIFEST  the game's catalog.json, relative to the project root\n  OUTPUT    the .zx file to write\n";
+
+main :: (argc: s32, argv: **u8) -> s32 {
+    arguments: Vec(string)
+    index: s32 = 1
+    while index < argc {
+        VecPush(arguments, TextFromCString(argv[index]))
+        index += 1
+    }
+    if arguments.count == 1 && (arguments[0] == "help" || arguments[0] == "--help") {
+        unused WriteOutput(USAGE)
+        return 0
+    }
+    release := arguments.count == 4 && arguments[3] == "--release"
+    if arguments.count < 3 || arguments[0] != "pack" || (arguments.count == 4 && !release) || arguments.count > 4 {
+        unused PrintError(USAGE)
+        return 2
+    }
+    return ifx Pack(arguments[1], arguments[2], release) then 0 else 1
+}
