@@ -4,12 +4,10 @@
   "apps": [
     {
       "manifest": "catalog.json",
-      "library_entries": ["fixture:FixtureScore"],
       "shared_records": ["best.dat"]
     },
     {
       "manifest": "editor/catalog.json",
-      "shared_code": true,
       "requires": ["test.gamekit.fixture"]
     }
   ]

@@ -1,4 +1,5 @@
-// The fixture's add-on: it reuses the game's code through its library.
+// The fixture's add-on: it imports the game's code, which the linker builds
+// into the add-on's own bundle.
 #import "apps/node_types"
 #import "apps/node_app"
 #import "fixture"

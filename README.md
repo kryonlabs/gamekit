@@ -57,8 +57,8 @@ then:
 5. for an app whose `apps.json` entry `requires` another app of the project,
    replaces byte-identical shared copies by links to that app's resources and
    writes `requirements.json` with the links and the required bundle's
-   SHA-256; with `shared_code` the add-on links against that bundle as a
-   library; `library_entries` are retained in the base bundle;
+   SHA-256. An add-on that reuses the game's code imports the game's modules;
+   the linker builds that code into the add-on's own bundle;
 6. bundles `source` and `entry` with `ziran bundle --project`, using the
    game's own lock (`--locked` without a `ziran.local.toml`), its
    `build_defines` and `KRYON_HOSTED_UI`.

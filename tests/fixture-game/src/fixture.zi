@@ -1,4 +1,5 @@
-// A minimal game-v1 game: it answers frames and offers a library entry.
+// A minimal game-v1 game: it answers frames and shares FixtureScore with its
+// add-on.
 #import "apps/node_types"
 #import "apps/node_app"
 // Written by `ziran tool gamekit pack` into the bundle's generated folder.

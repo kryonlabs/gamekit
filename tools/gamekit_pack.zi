@@ -15,7 +15,6 @@
 
 PACK_REQUIRES_MAX :: 8
 PACK_SHARED_RECORDS_MAX :: 8
-PACK_LIBRARY_ENTRIES_MAX :: 64
 PACK_RESOURCE_LINKS_MAX :: 16
 
 // One shared_assets.json copy: a project file or folder copied to
@@ -39,8 +38,6 @@ PackApp :: struct {
     prepare: string
     defines: Vec(string)
     requires: Vec(string)
-    shared_code: bool
-    library_entries: Vec(string)
     copies: Vec(PackCopy)
 }
 
@@ -141,8 +138,8 @@ PackIdentifier :: (text: string) -> bool {
     return true
 }
 
-// module:Function, as `ziran bundle --retain` takes it.
-PackLibraryEntryValid :: (entry: string) -> bool {
+// module:Function, as `ziran bundle --entry` takes it.
+PackEntryValid :: (entry: string) -> bool {
     if entry.count > 253 { return false }
     colon := TextFind(entry, ":")
     return colon > 0 && PackIdentifier(entry[:colon]) && PackIdentifier(entry[colon + 1:])
@@ -187,7 +184,7 @@ PackCopies :: (root: string, manifest: string, copies: *Vec(PackCopy)) -> bool {
 }
 
 // Reads MANIFEST (catalog.json, relative to ROOT) and, when the project's
-// apps.json lists it, that entry's dependencies and portable library entries.
+// apps.json lists it, that entry's dependencies and shared records.
 PackReadApp :: (root: string, manifest: string, app: *PackApp) -> bool {
     if !PackRelativeValid(manifest) { return PackFail("invalid manifest path", manifest) }
     app.manifest = manifest
@@ -221,7 +218,7 @@ PackReadApp :: (root: string, manifest: string, app: *PackApp) -> bool {
     app.entry = PackField(*document, top, "entry")
     app.prepare = PackField(*document, top, "prepare_assets")
     if !PackRelativeValid(app.assets) || !PackRelativeValid(app.locales) || !PackRelativeValid(app.source) ||
-    app.locale_prefix.count == 0 || !PackLibraryEntryValid(app.entry) {
+    app.locale_prefix.count == 0 || !PackEntryValid(app.entry) {
         return PackFail("catalog.json needs relative assets, locales and source, a locale_prefix and a module:Function entry", path)
     }
     if app.prepare.count > 0 && (!PackRelativeValid(app.prepare) ||
@@ -242,22 +239,13 @@ PackReadApp :: (root: string, manifest: string, app: *PackApp) -> bool {
             while member >= 0 {
                 key := JsonKey(*apps, member)
                 if key != "manifest" && key != "cover" && key != "enabled" && key != "requires" &&
-                key != "shared_code" && key != "library_entries" && key != "shared_records" {
+                key != "shared_records" {
                     return PackFail("unknown apps.json field", key)
                 }
                 member = JsonNext(*apps, member)
             }
             if !PackStrings(*apps, item, "requires", PACK_REQUIRES_MAX, *app.requires) {
                 return PackFail("invalid app dependencies", manifest)
-            }
-            shared := JsonMember(*apps, item, "shared_code")
-            if shared >= 0 {
-                value, ok := JsonBool(*apps, shared)
-                if !ok { return PackFail("shared_code is not a bool", manifest) }
-                app.shared_code = value
-            }
-            if app.shared_code && app.requires.count == 0 {
-                return PackFail("shared code needs declared dependencies", manifest)
             }
             records: Vec(string)
             if !PackStrings(*apps, item, "shared_records", PACK_SHARED_RECORDS_MAX, *records) {
@@ -266,16 +254,6 @@ PackReadApp :: (root: string, manifest: string, app: *PackApp) -> bool {
             index: s64 = 0
             while index < records.count {
                 if !PackRecordNameValid(records[index]) { return PackFail("invalid shared record", records[index]) }
-                index += 1
-            }
-            if !PackStrings(*apps, item, "library_entries", PACK_LIBRARY_ENTRIES_MAX, *app.library_entries) {
-                return PackFail("invalid portable library entries", manifest)
-            }
-            index = 0
-            while index < app.library_entries.count {
-                if !PackLibraryEntryValid(app.library_entries[index]) {
-                    return PackFail("invalid portable library entry", app.library_entries[index])
-                }
                 index += 1
             }
             return true
@@ -791,26 +769,6 @@ Pack :: (manifest: string, output: string, release: bool = false) -> bool {
         VecPush(arguments, "--define")
         VecPush(arguments, app.defines[index])
         index += 1
-    }
-    index = 0
-    while index < app.library_entries.count {
-        VecPush(arguments, "--retain")
-        VecPush(arguments, app.library_entries[index])
-        index += 1
-    }
-    if app.shared_code {
-        index = 0
-        while index < app.requires.count {
-            original: PackApp
-            if !PackFindApp(root, app.requires[index], *original) {
-                return PackFail("the project's apps.json declares no app with the required id", app.requires[index])
-            }
-            library := JoinPath(bundles, PackConcat(original.name, ".zx"))
-            if !IsFile(library) { return PackFail("pack the required app first; missing", library) }
-            VecPush(arguments, "--library")
-            VecPush(arguments, library)
-            index += 1
-        }
     }
     VecPush(arguments, "--define")
     VecPush(arguments, "KRYON_HOSTED_UI")

@@ -47,6 +47,28 @@ PackagePath :: (root: string, name: string) -> string {
     return ifx ok then TextTrim(text) else ""
 }
 
+// The alias one of EDGES names package ID by, or "".
+EdgeAlias :: (lock: *JsonDocument, edges: s32, id: string) -> string {
+    edge := JsonFirst(lock, edges)
+    while edge >= 0 {
+        if JsonString(lock, edge) == id { return JsonKey(lock, edge) }
+        edge = JsonNext(lock, edge)
+    }
+    return ""
+}
+
+// The alias the lock's edges name package ID by. An override key must be an
+// identifier, which a package name such as image-codec is not.
+LockAlias :: (lock: *JsonDocument, id: string, name: string) -> string {
+    alias := EdgeAlias(lock, JsonMember(lock, JsonMember(lock, lock.root, "root"), "dependencies"), id)
+    package := JsonFirst(lock, JsonMember(lock, lock.root, "packages"))
+    while alias.count == 0 && package >= 0 {
+        alias = EdgeAlias(lock, JsonMember(lock, package, "dependencies"), id)
+        package = JsonNext(lock, package)
+    }
+    return ifx alias.count > 0 then alias else name
+}
+
 // Overrides for gamekit itself and every package gamekit's lock pins.
 WriteOverrides :: (root: string, work: string) -> bool {
     lock_text, found := ReadEntireFile(JoinPath(root, "ziran.lock"))
@@ -62,7 +84,8 @@ WriteOverrides :: (root: string, work: string) -> bool {
         name := JsonString(*lock, JsonMember(*lock, item, "name"))
         path := PackagePath(root, name)
         if path.count == 0 { return false }
-        BuilderPrint(*text, "% = %\n", name, JsonQuote(path))
+        alias := LockAlias(*lock, JsonString(*lock, JsonMember(*lock, item, "id")), name)
+        BuilderPrint(*text, "% = %\n", alias, JsonQuote(path))
         item = JsonNext(*lock, item)
     }
     return WriteEntireFile(JoinPath(work, "ziran.local.toml"), BuilderFinish(text))
@@ -185,10 +208,9 @@ main :: (argc: s32, argv: **u8) -> s32 {
     Check(game != null, "the game bundle is a valid .zx")
     if game == null { return 1 }
     CheckGame(game)
-    libraries: [1]*void
-    libraries[0] = game
-    editor := OpenBundleWithLibraries(*editor_name[0], *libraries[0], 1)
-    Check(editor != null, "the add-on is a valid .zx against the game's library")
+    // The add-on imports the game's code, so its own bundle carries it.
+    editor := OpenBundle(*editor_name[0])
+    Check(editor != null, "the add-on is a valid .zx on its own")
     if editor != null {
         CheckEditor(editor, game_path)
         CloseBundle(editor)

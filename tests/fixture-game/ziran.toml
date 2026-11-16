@@ -5,7 +5,7 @@ module_roots = ["src"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "0c95f8496de686d851a2c9ee5188ddb56c81e8c6"
+ref = "768495fcbde70e1168c3533c991b462f57b549f8"
 
 [dependencies.gamekit]
 git = "https://github.com/waozixyz/gamekit.git"
@@ -13,8 +13,8 @@ ref = "master"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "a02feeb703192f1481e72160b1ccff401d17ef9d"
+ref = "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"
 
 [dependencies.apps]
 git = "https://github.com/waozixyz/apps.git"
-ref = "47ce0302664fe2f87f3cb05407eac7aa09066c96"
+ref = "07420f6b0613b7a5519d5637df46938130816e02"

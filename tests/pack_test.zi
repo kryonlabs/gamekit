@@ -88,11 +88,10 @@ LinksTest :: (fixture: string, work: string) {
     Check(PackReadApp(fixture, "catalog.json", *base), "read the game")
     Check(base.id == "test.gamekit.fixture" && base.name == "fixture" && base.prepare == "tools/prepare.zi", "game descriptor")
     Check(base.defines.count == 1 && base.defines[0] == "FIXTURE_PORTABLE", "game build defines")
-    Check(base.library_entries.count == 1 && base.library_entries[0] == "fixture:FixtureScore", "portable library entries")
-    Check(base.requires.count == 0 && !base.shared_code, "the game requires nothing")
+    Check(base.requires.count == 0, "the game requires nothing")
     app: PackApp
     Check(PackReadApp(fixture, "./editor/catalog.json", *app), "read the add-on")
-    Check(app.requires.count == 1 && app.requires[0] == "test.gamekit.fixture" && app.shared_code, "add-on requirements")
+    Check(app.requires.count == 1 && app.requires[0] == "test.gamekit.fixture", "add-on requirements")
     Check(app.copies.count == 3, "add-on shared asset copies")
     staged := Path(work, "staged")
     resources := Path(staged, "fixture-editor/assets/fixture-editor")
@@ -130,8 +129,8 @@ LinksTest :: (fixture: string, work: string) {
 ValidationTest :: (fixture: string, work: string) {
     Check(PackRelativeValid("assets/a.png") && !PackRelativeValid("../a") && !PackRelativeValid("a/../b") &&
         !PackRelativeValid("/a") && !PackRelativeValid(""), "project-relative paths")
-    Check(PackLibraryEntryValid("json_scan:ArrayPositions") && !PackLibraryEntryValid("portable") &&
-        !PackLibraryEntryValid("1a:B") && !PackLibraryEntryValid("a:B:C"), "library entries")
+    Check(PackEntryValid("json_scan:ArrayPositions") && !PackEntryValid("portable") &&
+        !PackEntryValid("1a:B") && !PackEntryValid("a:B:C"), "entries")
     Check(PackRecordNameValid("reach.dat") && !PackRecordNameValid("..") && !PackRecordNameValid("a/b"), "shared record names")
     app: PackApp
     Check(!PackReadApp(fixture, "../fixture-game/catalog.json", *app), "a manifest outside the project")
@@ -142,8 +141,8 @@ ValidationTest :: (fixture: string, work: string) {
     Check(!PackReadApp(bad, "catalog.json", *newer), "a newer host API is refused")
     Check(WriteEntireFile(Path(bad, "apps.json"), "{\"apps\": [{\"manifest\": \"game.json\", \"shared_code\": true}]}"), "bad apps.json")
     Check(WriteEntireFile(Path(bad, "game.json"), "{\"id\": \"x\", \"name\": \"x\", \"kind\": \"game\", \"contract_version\": 1, \"module_api\": 2, \"host_api\": 41, \"save_schema\": 1, \"assets\": \"a\", \"locales\": \"l\", \"locale_prefix\": \"x_\", \"source\": \"s.zi\", \"entry\": \"s:Main\"}"), "game.json")
-    unshared: PackApp
-    Check(!PackReadApp(bad, "game.json", *unshared), "shared code needs dependencies")
+    retired: PackApp
+    Check(!PackReadApp(bad, "game.json", *retired), "the retired shared_code field is refused")
     Check(WriteEntireFile(Path(bad, "apps.json"), "{\"apps\": [{\"manifest\": \"game.json\", \"covers\": {}}]}"), "unknown field")
     unknown: PackApp
     Check(!PackReadApp(bad, "game.json", *unknown), "unknown apps.json fields are refused")
