@@ -4,7 +4,7 @@ module_roots = ["src", "tools", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "ee68a8b268b87f3ee61f9f6f91f22d1206900f6f"
+ref = "f9f92b46db88b48cede41a6feb560915972b2ce6"
 
 [exports]
 contract = "src/gamekit_contract.zi"
@@ -16,7 +16,7 @@ ref = "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"
 
 [dependencies.apps]
 git = "https://github.com/waozixyz/apps.git"
-ref = "63fec6f66328eed8b5c9ded456aec95f993ba907"
+ref = "349658105ffdbeefa85a8a916f3cb00722d8e501"
 
 [dependencies.crypto]
 git = "https://github.com/ziranlang/crypto.git"
