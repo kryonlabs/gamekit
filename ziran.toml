@@ -12,11 +12,11 @@ host = "src/gamekit_host.zi"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"
+ref = "245605c359da7c77f1a05968eee48e39c7256092"
 
 [dependencies.apps]
 git = "https://github.com/waozixyz/apps.git"
-ref = "349658105ffdbeefa85a8a916f3cb00722d8e501"
+ref = "1c84ea0bc70b331856604f4f07f4e0d58c2e0220"
 
 [dependencies.crypto]
 git = "https://github.com/ziranlang/crypto.git"
