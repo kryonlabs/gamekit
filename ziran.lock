@@ -38,6 +38,15 @@
       "url": "https://github.com/webmproject/libwebp.git"
     },
     {
+      "commit": "63fec6f66328eed8b5c9ded456aec95f993ba907",
+      "dependencies": {"crypto": "pc23fbf455e97614d", "daochi_client": "p6af0b5bd9fd0cd31", "kryon": "pe4f910da430549bd"},
+      "dependency_refs": {"crypto": "master", "daochi_client": "970d5e44b1702158cb16469892da6ff50f142427", "kryon": "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"},
+      "id": "p47c27d5e8868b868",
+      "name": "Apps",
+      "ref": "63fec6f66328eed8b5c9ded456aec95f993ba907",
+      "url": "https://github.com/waozixyz/apps.git"
+    },
+    {
       "commit": "1aadfad932c98c069a1204261b1856f81f3bc199",
       "dependencies": {},
       "id": "p57c0272208aae8db",
@@ -45,15 +54,6 @@
       "ref": "1aadfad932c98c069a1204261b1856f81f3bc199",
       "source": true,
       "url": "https://github.com/AOMediaCodec/libavif.git"
-    },
-    {
-      "commit": "07420f6b0613b7a5519d5637df46938130816e02",
-      "dependencies": {"crypto": "pc23fbf455e97614d", "daochi_client": "p6af0b5bd9fd0cd31", "kryon": "pe4f910da430549bd"},
-      "dependency_refs": {"crypto": "master", "daochi_client": "970d5e44b1702158cb16469892da6ff50f142427", "kryon": "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"},
-      "id": "p581f1a955786492d",
-      "name": "Apps",
-      "ref": "07420f6b0613b7a5519d5637df46938130816e02",
-      "url": "https://github.com/waozixyz/apps.git"
     },
     {
       "commit": "bd278217e2bac754d868b3d6502eac4257658d4b",
@@ -172,13 +172,13 @@
     }
   ],
   "root": {
-    "dependencies": {"apps": "p581f1a955786492d", "crypto": "pc23fbf455e97614d", "kryon": "pe4f910da430549bd"},
-    "dependency_refs": {"apps": "07420f6b0613b7a5519d5637df46938130816e02", "crypto": "944826f70779a6b6cd53f6b06a75b36f4d8a2558", "kryon": "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"},
+    "dependencies": {"apps": "p47c27d5e8868b868", "crypto": "pc23fbf455e97614d", "kryon": "pe4f910da430549bd"},
+    "dependency_refs": {"apps": "63fec6f66328eed8b5c9ded456aec95f993ba907", "crypto": "944826f70779a6b6cd53f6b06a75b36f4d8a2558", "kryon": "0dea8bc28bd61b13dadabf9efdf137bd530c5d45"},
     "name": "Gamekit"
   },
   "toolchain": {
-    "commit": "768495fcbde70e1168c3533c991b462f57b549f8",
-    "ref": "768495fcbde70e1168c3533c991b462f57b549f8",
+    "commit": "ee68a8b268b87f3ee61f9f6f91f22d1206900f6f",
+    "ref": "ee68a8b268b87f3ee61f9f6f91f22d1206900f6f",
     "url": "https://github.com/ziranlang/ziran.git"
   }
 }
