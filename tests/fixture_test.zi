@@ -43,7 +43,9 @@ Run :: (arguments: []string, directory: string, capture: bool) -> (output: strin
 
 PackagePath :: (root: string, name: string) -> string {
     arguments: [5]string = .["ziran", "pkg", "path", name, "--locked"]
-    text, ok := Run(arguments[:], root, true)
+    local_text, has_local := ReadEntireFile(JoinPath(root, "ziran.local.toml"))
+    unused local_text
+    text, ok := Run(arguments[0:ifx has_local then 4 else 5], root, true)
     return ifx ok then TextTrim(text) else ""
 }
 

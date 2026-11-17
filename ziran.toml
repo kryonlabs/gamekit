@@ -4,7 +4,7 @@ module_roots = ["src", "tools", "tests"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "f9f92b46db88b48cede41a6feb560915972b2ce6"
+ref = "e0367fa9c5731dcf9bb84ed7f3d294570d8c0bda"
 
 [exports]
 contract = "src/gamekit_contract.zi"
@@ -12,11 +12,11 @@ host = "src/gamekit_host.zi"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "b45cc52456775dac23062979888ee04c5537b078"
+ref = "3f72441949d4e16094834fa9220e5d7fa77a0ac0"
 
 [dependencies.apps]
 git = "https://github.com/waozixyz/apps.git"
-ref = "352901ebf97ef3570971bf999367c82171cabf9a"
+ref = "40f598a1719bc99bbef7b61649aa168e923ef1f5"
 
 [dependencies.crypto]
 git = "https://github.com/ziranlang/crypto.git"
