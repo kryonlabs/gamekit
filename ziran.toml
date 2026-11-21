@@ -3,23 +3,23 @@ name = "Gamekit"
 module_roots = ["src", "tools", "tests"]
 
 [toolchain]
-git = "https://github.com/ziranlang/ziran.git"
-ref = "e0367fa9c5731dcf9bb84ed7f3d294570d8c0bda"
+git = "https://git.waozi.xyz/ziranlang/ziran.git"
+ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
 
 [exports]
 contract = "src/gamekit_contract.zi"
 host = "src/gamekit_host.zi"
 
 [dependencies.kryon]
-git = "https://github.com/kryonlabs/kryon.git"
-ref = "3f72441949d4e16094834fa9220e5d7fa77a0ac0"
+git = "https://git.waozi.xyz/kryonlabs/kryon.git"
+ref = "894f1bc6b7a0fb0e9db6f668fe20f76581f61736"
 
 [dependencies.apps]
-git = "https://github.com/waozixyz/apps.git"
-ref = "40f598a1719bc99bbef7b61649aa168e923ef1f5"
+git = "https://git.waozi.xyz/waozi/apps.git"
+ref = "38e8fcef403e4ca271b5ffa68e9da60dfceab909"
 
 [dependencies.crypto]
-git = "https://github.com/ziranlang/crypto.git"
+git = "https://git.waozi.xyz/ziranlang/crypto.git"
 ref = "944826f70779a6b6cd53f6b06a75b36f4d8a2558"
 
 # `ziran tool gamekit pack MANIFEST OUTPUT` packs a game from its own project.

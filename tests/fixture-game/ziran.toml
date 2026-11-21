@@ -4,17 +4,17 @@ entry = "src/fixture.zi"
 module_roots = ["src"]
 
 [toolchain]
-git = "https://github.com/ziranlang/ziran.git"
-ref = "f9f92b46db88b48cede41a6feb560915972b2ce6"
+git = "https://git.waozi.xyz/ziranlang/ziran.git"
+ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
 
 [dependencies.gamekit]
-git = "https://github.com/waozixyz/gamekit.git"
-ref = "master"
+git = "https://git.waozi.xyz/waozi/gamekit.git"
+ref = "6d869d57010d4c72cd13ff19c5bb9570f79d51ec"
 
 [dependencies.kryon]
-git = "https://github.com/kryonlabs/kryon.git"
-ref = "b45cc52456775dac23062979888ee04c5537b078"
+git = "https://git.waozi.xyz/kryonlabs/kryon.git"
+ref = "894f1bc6b7a0fb0e9db6f668fe20f76581f61736"
 
 [dependencies.apps]
-git = "https://github.com/waozixyz/apps.git"
-ref = "352901ebf97ef3570971bf999367c82171cabf9a"
+git = "https://git.waozi.xyz/waozi/apps.git"
+ref = "38e8fcef403e4ca271b5ffa68e9da60dfceab909"
