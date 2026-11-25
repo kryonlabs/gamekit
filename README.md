@@ -7,7 +7,7 @@ on a particular collection or player.
 
 ```toml
 [dependencies.gamekit]
-git = "https://github.com/waozixyz/gamekit.git"
+git = "https://github.com/kryonlabs/gamekit.git"
 ref = "master"
 ```
 
